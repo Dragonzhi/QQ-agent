@@ -134,6 +134,12 @@ export class SendQueue {
    * 返回 { sent: [{text, messageId}], failed: [{text, error}] }；全部失败时抛错。
    */
   async sendTextBatch(chatKey, messages, options = {}) {
+    // ── VoiceBus：call:* 会话（语音通话）走语音桥播放，不发 QQ ──
+    // chatKey 形如 call:private:<QQ号>。桥没连上时抛错，让模型看到发送失败。
+    if (String(chatKey).startsWith('call:')) {
+      if (!this.voiceBus?.ready) throw new Error('语音桥未连接（worker 不在线），通话里说不了话');
+      return this.voiceBus.say(chatKey, messages);
+    }
     const [kind, id] = String(chatKey).split(':');
     if (kind !== 'group' && kind !== 'private') throw new Error(`非法会话 key：${chatKey}`);
     const list = Array.isArray(messages) ? messages : [messages];

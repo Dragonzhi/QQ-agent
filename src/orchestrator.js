@@ -183,7 +183,8 @@ export class Orchestrator {
         botName: cfg.persona?.botName || '',
         selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
         cfg: storeConfigForChat(chatKey),
-        isPrivate: String(chatKey).startsWith('private:'),
+        // isPrivate：私聊 + 语音通话（call:private:*，1v1 通话全接，见 VoiceBus）
+        isPrivate: String(chatKey).startsWith('private:') || String(chatKey).startsWith('call:'),
         // 单条判定当场掷骰、当场出结果 —— 没有"预判/实跑"两阶段了，
         // 骰子结果由 resolveContextTier 的 reason 带回（含当时的值）。
         roll: null
@@ -519,7 +520,8 @@ export class Orchestrator {
         botName: cfgNow.persona?.botName || '',
         selfId: cfgNow.onebot?.selfId || this.onebot.selfId || '',
         cfg: storeConfigForChat(chatKey),
-        isPrivate: String(chatKey).startsWith('private:'),   // 私聊恒响应
+        // isPrivate：私聊 + 语音通话（call:private:*，1v1 通话全接，见 VoiceBus）
+        isPrivate: String(chatKey).startsWith('private:') || String(chatKey).startsWith('call:'),   // 私聊恒响应
         roll: null
       });
     // 活跃期覆盖：必响应，读取条数与其余档位一致（统一 historyCount），

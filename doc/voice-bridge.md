@@ -234,6 +234,29 @@ plugins/voice-bridge/
 | M2 | 体验：门控、打断指令、音色、通话记忆（通话内容可按需 memory_append） | 2-3 天 |
 | M3 | 声纹库（群通话说话人归属）+ mc-voice profile + hotline WS source | 按需 |
 
+### M1 实施状态（2026-10-11 凌晨）
+
+已完成并在 feature/voice-bridge 分支提交：
+
+- `src/voice-bus.js`：总线 WS 服务端（3211）、门控、空闲/口令挂断、状态广播
+- `src/app.js`：总线实例化 + `ingestVoiceMessage`（合成入站，chatKey=`call:private:<target>`）
+- `src/sender.js`：`call:*` 会话路由到语音桥（不发 QQ）
+- `src/orchestrator.js`：`isPrivate` 放行 `call:`（1v1 全接）
+- `plugins/voice-bridge/`：plugin.json + index.js（worker 看护、控制连接、3 个工具）+ voice_worker.py
+- 已验证：总线启动、worker 自动拉起（activate 生命周期）、设备选择（采集=立体声混音[WDM-KS]、播放=CABLE Input[MME]）、采集开启、edge-tts 生成与播放目标
+- **待验证（需重启电脑恢复 WDM-KS 设备后）**：VAD→whisper→转写→会话→LLM→TTS 播回全链路
+
+### 实施踩坑记录（已写进代码注释）
+
+1. **设备名 mojibake**：「立体声混音」等中文设备名是 GBK/UTF-8 错位字节，中文子串匹配不可靠 → 默认采集关键词用 ASCII 锚点 `Realtek HD Audio 2nd output`
+2. **`f'max_{kind}channels'` 少下划线**：字典键是 `max_output_channels`，少一个下划线导致永远匹配不上（自检全 FAIL 的根因）
+3. **WDM-KS 设备只能回调式打开**：RawInputStream / 无 callback 的 InputStream 报 `Blocking API not supported yet`，必须带 callback
+4. **强杀开着 WDM-KS 流的进程会废掉设备**：变 Invalid device 直到重启音频服务/电脑 → worker 采集流随开关开合 + 插件杀进程前先发 capture:off 等 400ms
+5. **VAD 噪声底会被启动瞬间的语音污染**：阈值飙高永远检测不到 → 持续慢速跟踪 + 封顶 1200
+6. **setup() 里读不到自己的配置**：技能此时还没进 registry，`api.config()` 返回 `{}` → 读配置和拉 worker 延后到 `activate()`
+7. **StepFun ASR/TTS 暂不可用**：ASR 402 quota_exceeded、TTS 400 schema 不明 → M1 用 faster-whisper + edge-tts 免费本地栈，StepFun 留待在 profile 里换回
+8. **沙箱启动 QQ-Agent 的坑**：`ELECTRON_RUN_AS_NODE=1` 会让 electron 静默崩溃，启动前删掉该变量
+
 ---
 
 ## 附录 A：本仓库现有本地核心补丁（fork 基线）

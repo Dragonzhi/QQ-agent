@@ -17,6 +17,7 @@ import { SessionRegistry } from './sessions.js';
 import { Orchestrator } from './orchestrator.js';
 import { ReminderStore } from './reminders.js';
 import { VideoReader } from './video-reader.js';
+import { VoiceBus } from './voice-bus.js';
 import { cacheHitRate } from './llm.js';
 import { isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed } from './price-feed.js';
@@ -646,6 +647,40 @@ export function createApp({ log = console.log } = {}) {
   const reminders = new ReminderStore();
   const videoReader = new VideoReader(onebot);
   const orchestrator = new Orchestrator({ store, memory, stickers, sender, sessions, onebot, emit, reminders, videoReader });
+
+  // ── VoiceBus 语音桥（与 OneBot 平级的第二条传输通道，见 voice-bus.js）──
+  const voiceBus = new VoiceBus({
+    port: Number(cfg.voice?.port) || 3211,
+    idleMinutes: Number(cfg.voice?.idleMinutes) || 15,
+    log,
+    warn: (...a) => console.warn(...a)
+  });
+  sender.voiceBus = voiceBus;   // sender 拦截 call:* 会话时用
+  voiceBus.onTranscript = (text) => ingestVoiceMessage(text);
+  voiceBus.start();
+
+  /**
+   * 通话转写 → 合成入站消息（与 OneBot 入站平级的入口）。
+   * chatKey = call:private:<target>：orchestrator 视作私聊（全接），
+   * sender 拦截后经 TTS 播放回通话，不发 QQ。
+   */
+  function ingestVoiceMessage(text) {
+    const target = voiceBus.target || 'test';
+    const chatKey = `call:private:${target}`;
+    const entry = store.appendIncoming(chatKey, {
+      // 合成 mid：取负数避免与真实 QQ 消息 id 撞（存档/引用都按 mid 查）
+      mid: -(Date.now() % 2147483647),
+      ts: Date.now(),
+      senderId: target,
+      senderName: target === 'test' ? '自测' : '通话对方',
+      text,
+      media: [],
+      atMe: true,
+      atNames: []
+    });
+    emit('chat-update', chatKey);
+    orchestrator.onIncoming(chatKey, entry);
+  }
 
   // 远程价格表固定为官网公开地址；不从用户配置读取，避免被页面/配置篡改。
   initPriceFeed(FIXED_PRICE_FEED_URL);
@@ -1644,7 +1679,8 @@ export function createApp({ log = console.log } = {}) {
     // 先停掉热重载 watcher：否则 stop() 之后文件变动仍会触发重载 + 广播
     try { pluginWatcher?.close?.(); } catch { /* ignore */ }
     pluginWatcher = null;
-    await orchestrator.abortAll();
+    try { await orchestrator.abortAll(); } catch { /* ignore */ }
+    try { voiceBus.stop(); } catch { /* 总线已关 */ }
     orchestrator.stopReminderLoop();
     if (communitySyncTimer) clearInterval(communitySyncTimer);
     if (obPortPollTimer) clearInterval(obPortPollTimer);

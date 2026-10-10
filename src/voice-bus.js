@@ -57,8 +57,14 @@ export class VoiceBus {
         this.controls.add(ws);
         ws.on('close', () => this.controls.delete(ws));
       } else {
-        if (this.worker && this.worker !== ws) {
-          try { this.worker.close(); } catch { /* 旧连接可能已半死 */ }
+        if (this.worker && this.worker.readyState === 1) {
+          // 已有 worker：拒绝新来的。以前是「踢掉旧的」，但旧 worker 3 秒后重连
+          // 又把新的踢掉——两个进程乒乓重连。让新来的收到 bye 自行退出更干净
+          // （worker 侧收到 bye 就 os._exit，不回重连）。
+          this.warn('[voice] 已有 worker 在线，拒绝重复连接');
+          try { ws.send(JSON.stringify({ type: 'bye', reason: '已有 worker 在线' })); } catch { /* 忽略 */ }
+          setTimeout(() => { try { ws.close(); } catch { /* 忽略 */ } }, 300).unref?.();
+          return;
         }
         this.worker = ws;
         this.log('[voice] worker 已连接');

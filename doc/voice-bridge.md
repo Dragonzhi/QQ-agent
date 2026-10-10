@@ -95,19 +95,32 @@
 3. 声桥：采集 CABLE-A Output（朋友原声，无系统杂音）；TTS 播放到 CABLE-B Input；同时把采集外放到管理员耳机（监听）。
 4. 管理员戴耳机（防自己的声音绕回采集端）。
 
-### B 案：免费单电缆 + 立体声混音（本机可用，M1 先用）
+### B 案（v0.2 落地版）：免费单电缆 + WASAPI 回环（本机已跑通）
 
-本机已确认有**立体声混音**采集设备 + 已装免费 VB-CABLE（基础版）：
+本机只有一对 VB-CABLE（基础版），一个方向一根线不够用，所以：
+
+- 小鲸鱼说话 → 走「电缆」→ QQ 麦克风
+- 听对方说话 → 走 **WASAPI 回环**（采 QQ 扬声器所在端点）
 
 | 角色 | 设备 | 说明 |
 |---|---|---|
-| QQ 扬声器 | 系统默认播放（耳机） | 管理员直接听到朋友 |
-| **采集源** | **立体声混音** | 默认播放的混音 = 朋友的声音（TTS 不在默认播放上，采不到自己） |
-| QQ 麦克风 | CABLE Output | 接机器人的声音 |
-| TTS 播放目标 | CABLE Input | → CABLE Output → QQ 麦克风 |
-| 管理员自己的声音 | 物理麦“侦听此设备”→ CABLE Input | 与 TTS 混合，管理员也能在通话里说话 |
+| **采集源** | QQ 语音「扬声器/听筒」所在端点的 **WASAPI 回环** | 共享模式：不独占、可多进程同开、跟随端点，端点变了自动重开 |
+| QQ 扬声器（听筒） | `扬声器 (网易虚拟音频设备)` | 虚拟声卡 = 电脑这边完全静音、无回声。想顺便听到对方就换成 `扬声器 (2- Realtek(R) Audio)` 并在设置里同步改 `captureDevice` |
+| QQ 麦克风 | `CABLE Output (VB-Audio Virtual Cable)` | 把 TTS 送进通话，对方才听得到小鲸鱼 |
+| TTS 播放目标 | `CABLE Input (VB-Audio Virtual Cable)` | → CABLE Output → QQ 麦克风 |
+| 管理员自己的声音（可选） | 物理麦「侦听此设备」→ CABLE Input | 与 TTS 混合，管理员也能在通话里说话 |
 
-优点：零成本；TTS 不会被自己采集到（无自激）。缺点：立体声混音会混入其他系统声音（微信提示音等），通话时需静音其他应用；要干净采集时再升级 A 案（A+B）。
+优点：零成本、全虚拟、电脑侧静音无回声；回环是共享模式，不会像 WDM-KS 那样独占、也不会「关流就废设备」。
+**唯一的硬约束**：`captureDevice` 必须和 QQ 里选的扬声器指向**同一个端点**，不一致就一句都采不到——2026-10-11 那次「自测无转写」就是这个原因。
+
+### ❌ 本机被否掉的采集方案（踩过的坑，别再走）
+
+| 方案 | 结果 |
+|---|---|
+| WDM-KS `立体声混音 (Realtek HD Audio 2nd output with SST)` | 能打开，但**一帧回调都不来**（它挂的端点是没插耳机的 2nd output，端点没在跑）；且 WDM-KS 引脚独占、强杀会留坏设备，要重启电脑 |
+| `耳机 (2- Realtek(R) Audio)` 端点 | 该端点当前是「未插入」状态：WASAPI 回环直接 `0x8889000A`，MME 播放也等于扔进黑洞。**旧自测脚本正是往这里播测试语音**，所以怎么测都白测 |
+| PortAudio 的内置回环 | 这一版 PortAudio 的 `WasapiSettings` 没有 `loopback` 参数，做不了回环 |
+| `CABLE In 16ch` 当第二根线 | 实测它和 `CABLE Input` 是**同一根电缆**（往任一个播，`CABLE Output` 都响），分不出两个方向 |
 
 ### 通用
 
@@ -234,17 +247,28 @@ plugins/voice-bridge/
 | M2 | 体验：门控、打断指令、音色、通话记忆（通话内容可按需 memory_append） | 2-3 天 |
 | M3 | 声纹库（群通话说话人归属）+ mc-voice profile + hotline WS source | 按需 |
 
-### M1 实施状态（2026-10-11 凌晨）
+### M1 实施状态（2026-10-11 凌晨，v0.2 回环版）
 
 已完成并在 feature/voice-bridge 分支提交：
 
-- `src/voice-bus.js`：总线 WS 服务端（3211）、门控、空闲/口令挂断、状态广播
+- `src/voice-bus.js`：总线 WS 服务端（3211）、门控、空闲/口令挂断、状态广播、**重复 worker 拒连（回 bye）**
 - `src/app.js`：总线实例化 + `ingestVoiceMessage`（合成入站，chatKey=`call:private:<target>`）
 - `src/sender.js`：`call:*` 会话路由到语音桥（不发 QQ）
 - `src/orchestrator.js`：`isPrivate` 放行 `call:`（1v1 全接）
-- `plugins/voice-bridge/`：plugin.json + index.js（worker 看护、控制连接、3 个工具）+ voice_worker.py
-- 已验证：总线启动、worker 自动拉起（activate 生命周期）、设备选择（采集=立体声混音[WDM-KS]、播放=CABLE Input[MME]）、采集开启、edge-tts 生成与播放目标
-- **待验证（需重启电脑恢复 WDM-KS 设备后）**：VAD→whisper→转写→会话→LLM→TTS 播回全链路
+- `plugins/voice-bridge/`：plugin.json + index.js（worker 看护、pid 单例门闩、控制连接、3 个工具）+ voice_worker.py
+- 已验证：总线启动、worker 自动拉起、**回环采集端点枚举/试读/连续 8 秒无卡顿**、播放设备解析、edge-tts + ffmpeg 转码路径
+
+v0.2 相对 v0.1 的改动（2026-10-11 排障后重构）：
+
+1. 采集从「PortAudio WDM-KS 立体声混音」换成「**soundcard 的 WASAPI 回环**」，`captureDevice` 语义变成「QQ 扬声器所在渲染端点的名字」；
+2. worker **设备缺失不再退出**（每 10 秒重试），从根上掐掉「秒退→重启」churn；
+3. 采集常开 + 软件门控不变，但回环是共享模式，**不再需要「永不关流」保命**，端点消失会自动重开；
+4. 采集线程独立（soundcard 的 `record()` 阻塞式），VAD 在采集线程算，凑够一句才丢给 asyncio 转写；
+5. `[统计]` 心跳改成「无条件每 5 秒一条」（v0.1 只在采集时打，导致「有帧没有」看不出来）：帧数/峰值/噪声底/阈值/采集中/播放中；
+6. 插件加 **pid 文件单例门闩** + `PYTHONUTF8=1`（否则中文日志全变乱码）+ 日志 2MB 轮转；
+7. 自测脚本 `E:\QQRobot\tools\e2e_full.py` 改成**从 worker 日志读它实际打开的回环端点，播到同一个端点**，并给出 PASS/PARTIAL/FAIL 判定。
+
+**待验证**：VAD→whisper→转写→会话→LLM→TTS 播回全链路（需要一通真实的 QQ 通话，或跑 e2e 自测）。
 
 ### 实施踩坑记录（已写进代码注释）
 
@@ -256,6 +280,11 @@ plugins/voice-bridge/
 6. **setup() 里读不到自己的配置**：技能此时还没进 registry，`api.config()` 返回 `{}` → 读配置和拉 worker 延后到 `activate()`
 7. **StepFun ASR/TTS 暂不可用**：ASR 402 quota_exceeded、TTS 400 schema 不明 → M1 用 faster-whisper + edge-tts 免费本地栈，StepFun 留待在 profile 里换回
 8. **沙箱启动 QQ-Agent 的坑**：`ELECTRON_RUN_AS_NODE=1` 会让 electron 静默崩溃，启动前删掉该变量
+9. **「能打开」≠「有数据」**：WDM-KS 混音设备 `InputStream` 打开成功、`start()` 不报错，但回调一次都不来。判据只能是**帧计数**——所以 v0.2 的 `[统计]` 心跳无条件每 5 秒打一条（v0.1 只在采集中打，看起来像「设备没动静」，实际是「压根没帧」）
+10. **测试语音播到了一个死端点**：`耳机 (2- Realtek(R) Audio)` 是没插耳机的插孔，MME 播放不报错、声音进黑洞。自测脚本必须**播到 worker 正在采的那个端点**（v0.2 的 e2e 从日志里读端点名再播）
+11. **插件 reload 会泄漏 spawn 循环**（一晚上 1753 次 spawn、11 个 python 进程）：旧模块实例的 `restartTimer` 不会随 reload 停，各自拉一个 worker；worker 又因为「设备不全」秒退 → 5 秒一轮。两头堵：worker 不退出 + pid 文件单例门闩 + 总线拒连重复 worker
+12. **worker 的中文日志会变乱码**：Python 子进程按 GBK 输出，Node `String(buf)` 按 UTF-8 解 → 文件里全是 `�`，排障时一个字都读不出。spawn 时给 `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8`
+13. **同一条总线不能有两个 worker**：总线原来是「新连接踢掉旧的」，旧 worker 3 秒后重连又把新的踢掉 → 乒乓重连。改成拒收新来的（回 `bye`，worker 收到即退出）
 
 ---
 

@@ -10,6 +10,21 @@ const RECONNECT_MAX_MS = 30000;
 const SELF_INFO_RETRY_MS = 15000;
 
 /**
+ * 卡片段渲染（核心补丁 A，2026-10-09 重打）：
+ * 把 OneBot json 段渲染成「[卡片消息｜标题：… 链接]」而不是无信息的 [卡片消息]。
+ * share-card / forward-summary 插件靠这个文本拿卡片里的链接。
+ * 解析器动态取自 plugins/share-card/lib/card.js（单一实现源）；插件被删/损坏时
+ * 静默退回原占位符 —— 核心绝不因插件缺失而崩。整个进程只 import 一次。
+ */
+let cardTextModPromise = null;
+function loadCardTextMod() {
+  if (!cardTextModPromise) {
+    cardTextModPromise = import('../plugins/share-card/lib/card.js').catch(() => null);
+  }
+  return cardTextModPromise;
+}
+
+/**
  * 正文 @ 规范化：把 `@昵称` 补成 `@昵称(QQ:xxx)`。
  * 走 `message.inline-at-normalize` 能力；没有提供者（Skill 未启用）时返回 null，
  * 调用方退回原文本 —— 保证"关掉 Skill 就不再有该效果"。
@@ -476,7 +491,17 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         out.push(replyText || '[引用消息]');
         break;
       }
-      case 'json': out.push('[卡片消息]'); break;
+      case 'json': {
+        // 补丁 A：卡片 payload 不再压成四个字，渲染出标题/来源/链接。
+        // OneBot 惯例结构是 { data: '<json 字符串>' }；有的实现直接给对象，都兜住。
+        let cardText = '[卡片消息]';
+        try {
+          const mod = await loadCardTextMod();
+          if (mod?.cardToText) cardText = mod.cardToText(d.data ?? d);
+        } catch { /* 渲染失败退回占位符，不阻断消息入库 */ }
+        out.push(cardText);
+        break;
+      }
       case 'forward': {
         // 不带 res_id：那个 id 会过期（payload is empty），打出来只会误导模型拿它当参数。
         // 模型要看内容用 read_forward 工具 + 消息前的 #数字。

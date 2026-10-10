@@ -854,13 +854,19 @@ export function createApp({ log = console.log } = {}) {
     }
 
     // 合并转发：占位符 → 展开真实内容（模型要读懂、看懂转发的聊天记录）
-    // 实测结论（2026-09-05，SnowLuma/NapCat）：get_forward_msg 只认 message_id；
-    // res_id（转发卡片里那个 id）会过期，报 "payload is empty"。
-    // 媒体里的 url 此时是新鲜的，一并收进 media（取图/金句都能用）。
+    // 实测结论（2026-10-10，SnowLuma）：get_forward_msg 认 `id` 参数（= 事件 forward 段的
+    // data.id，即 res_id）；传 message_id 时它只对**正数** id 去事件里反查 res_id ——
+    // SnowLuma 的消息 id 是 int32，负数 id 会被原样当 res_id 传给 QQ，报
+    // "download forward message payload is empty"。所以：有 res_id 就优先用它。
     // 展开失败时占位符留在存档里，模型可用 read_forward 工具稍后重试。
-    if (segments && (text.includes('[合并转发') || text.includes('[转发消息')) && event.message_id != null) {
+    const forwardResId = (() => {
+      const seg = (segments || []).find((s) => s?.type === 'forward');
+      const rid = seg?.data?.id ?? seg?.data?.res_id ?? seg?.data?.forward_id;
+      return rid ? String(rid) : null;
+    })();
+    if (segments && (text.includes('[合并转发') || text.includes('[转发消息')) && (forwardResId || event.message_id != null)) {
       try {
-        const r = await onebot.call('get_forward_msg', { message_id: Number(event.message_id) });
+        const r = await onebot.call('get_forward_msg', forwardResId ? { id: forwardResId } : { message_id: Number(event.message_id) });
         const nodes = Array.isArray(r?.messages) ? r.messages : (Array.isArray(r?.data?.messages) ? r.data.messages : []);
         const ex = await expandForwardNodes(nodes);
         if (ex && ex.text) {
@@ -906,7 +912,8 @@ export function createApp({ log = console.log } = {}) {
       text: text || '[图片]' ,
       media,
       atMe,
-      atNames
+      atNames,
+      forwardResId
     });
     emit('chat-update', `${kind}:${id}`);
     // 逐条触发判定：把刚入库的条目交给编排器（entry 让它能精确标这一条已读）

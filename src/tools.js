@@ -499,7 +499,7 @@ function registerAllTools() {
   registerTool({
     id: 'read_forward',
     name: '展开转发消息',
-    description: '展开查看合并转发的聊天记录。消息文本出现 [合并转发聊天记录] 或 [转发消息 …] 占位符时用。参数填那条转发消息前的 #数字（千万别用方括号里那串长 id，会过期报错）。展开结果会写回存档，以后再看就是展开的文本，不用重复调。',
+    description: '展开查看合并转发的聊天记录。消息文本出现 [合并转发聊天记录] 或 [转发消息 …] 占位符时用。参数填那条转发消息前的 #数字。展开结果会写回存档，以后再看就是展开的文本，不用重复调。',
     category: 'query',
     icon: '📨',
     parameters: {
@@ -517,7 +517,22 @@ function registerAllTools() {
         if (String(entry.text || '').startsWith('[合并转发 共')) {
           return ok({ messageId: entry.mid, text: entry.text, note: '该转发已展开（读的是存档）' });
         }
-        const r = await ctx.onebot.call('get_forward_msg', { message_id: Number(entry.mid) });
+        // get_forward_msg 的参数优先级（2026-10-10 实测 SnowLuma）：
+        //   ① id = 事件 forward 段的 data.id（res_id）—— 最可靠，正负数消息 id 都能用；
+        //   ② message_id —— SnowLuma 只对正数 id 反查 res_id，负数 id 会被当成
+        //      res_id 直传 QQ，报 "payload is empty"（本机消息 id 是 int32，常为负）。
+        // 老存档没有存 res_id 时，先用 get_msg 把事件拉回来从中恢复。
+        let resId = entry.forwardResId ? String(entry.forwardResId) : '';
+        if (!resId && ctx.onebot) {
+          try {
+            const msg = await ctx.onebot.getMsg(entry.mid);
+            const segs = Array.isArray(msg?.message) ? msg.message : [];
+            const fwd = segs.find((s) => s?.type === 'forward');
+            const rid = fwd?.data?.id ?? fwd?.data?.res_id ?? fwd?.data?.forward_id;
+            if (rid) resId = String(rid);
+          } catch { /* 恢复不了就走原参数，错误照常返回 */ }
+        }
+        const r = await ctx.onebot.call('get_forward_msg', resId ? { id: resId } : { message_id: Number(entry.mid) });
         const nodes = Array.isArray(r?.messages) ? r.messages : [];
         const ex = await expandForwardNodes(nodes);
         if (!ex || !ex.text) return err('转发内容为空或已被 QQ 服务端丢弃（发送时间太久）');
@@ -627,6 +642,27 @@ function registerAllTools() {
         const failed = [];
         for (const url of urls) {
           try { results.push(await downloadImageAsDataUrl(url)); } catch (e) { failed.push(String(e?.message ?? e)); }
+        }
+        // 入库时存的 URL 带 rkey，会过期（HTTP 400/403）。图片还没拿到时，
+        // 用 get_msg 现拉一份新鲜 segments 重试 —— QQ 的图片 CDN 链接活不久，
+        // 老消息、甚至几分钟前的消息都可能已经失效。
+        if (!results.length && ctx.onebot) {
+          let fresh = [];
+          try {
+            const msg = await ctx.onebot.getMsg(args.messageId);
+            const segs = Array.isArray(msg?.message) ? msg.message : [];
+            fresh = segs.filter((s) => s?.type === 'image' && s?.data?.url).map((s) => String(s.data.url));
+          } catch { /* get_msg 失败就到此为止，错误信息照常返回 */ }
+          for (const url of fresh) {
+            try { results.push(await downloadImageAsDataUrl(url)); } catch (e) { failed.push(String(e?.message ?? e)); }
+          }
+          if (results.length) {
+            // 顺手把新 URL 写回存档，下次不用再走刷新
+            try {
+              const media = entry.media || [];
+              fresh.forEach((u, i) => { if (media[i]) media[i].url = u; });
+            } catch { /* 存档更新失败不影响本次看图 */ }
+          }
         }
         if (!results.length) return err(`图片获取失败：${failed.join('；')}`);
         const note = failed.length ? `（另有 ${failed.length} 张获取失败）` : '';

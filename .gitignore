@@ -29,6 +29,7 @@ runtime/
 .DS_Store
 Thumbs.db
 desktop.ini
+*.lnk
 
 # 编辑器
 .vscode/
@@ -47,5 +48,10 @@ release/
 .env
 .env.local
 community.key
+
+# 本地插件与技能（个人内容、含第三方来源素材，不进公开仓库）
+# 想版本管理就另建 private 仓库，例如 github.com/Dragonzhi/qq-agent-plugins
+plugins/
+skills/
 
 .goal-baseline/

@@ -80,7 +80,7 @@ export class ChatStore {
   }
 
   /** 追加一条收到的消息（未读）。返回写入的条目。 */
-  appendIncoming(chatKey, { mid, ts, senderId, senderName, text, reply = null, media = [], isPoke = false, atMe = null, atNames = [] }) {
+  appendIncoming(chatKey, { mid, ts, senderId, senderName, text, reply = null, media = [], isPoke = false, atMe = null, atNames = [], forwardResId = null }) {
     const st = this.#state(chatKey);
     const entry = {
       id: st.nextLocalId++,
@@ -101,7 +101,10 @@ export class ChatStore {
       atMe: atMe === null || atMe === undefined ? null : Boolean(atMe),
       // 渲染进 text 的 @片段原文（含 @ 前缀）：关键词判定据此剔除，
       // 防"@ 别人的名字里带关键词"误触发。空数组 = 该消息没有 @ 段。
-      atNames: (Array.isArray(atNames) ? atNames : []).map((n) => String(n ?? '')).filter(Boolean).slice(0, 20)
+      atNames: (Array.isArray(atNames) ? atNames : []).map((n) => String(n ?? '')).filter(Boolean).slice(0, 20),
+      // 合并转发的 res_id（事件 forward 段的 data.id）：get_forward_msg 的权威参数。
+      // message_id 路径在 SnowLuma 上只对正数 id 有效（见 read_forward 注释）。
+      forwardResId: forwardResId ? String(forwardResId) : null
     };
     st.messages.push(entry);
     this.#trim(st);

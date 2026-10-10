@@ -5,6 +5,27 @@
 
 ---
 
+## 零、决议记录（2026-10-10 对账后锁定）
+
+| # | 议题 | 决议 |
+|---|---|---|
+| 1 | 管理员自己要在通话中说话 | **要**。Windows"侦听此设备"把物理麦混入 CABLE-B（零代码，延迟约 200ms） |
+| 2 | 群通话响应策略 | **点名才接**（喊"小鲸鱼"/@）；1v1 全接 |
+| 3 | 1v1 会话绑定 | **绑对方 QQ 号**，印象/记忆按真人走 |
+| 4 | 通话内容记忆 | 进会话存档（本地）；长期记忆由人格自主判断，不强制 |
+| 5 | 挂断判定 | 手动"挂断"指令 + **空闲 15 分钟自动睡** |
+| 6 | 无声纹陌生人 | 人格层自然处理（"你谁啊"），不特殊编码 |
+| 7 | ASR | **StepFun 双向流式 ASR（`asr-stream`）**，与 LLM 同厂商同余额；edge-tts 同级不涉及。Python worker 维护 WS 长连 |
+| 8 | ffmpeg | 装 CLI：`winget install -e --id Gyan.FFmpeg`（TTS mp3→PCM 转码；EdgeTTS 若直出 raw PCM 则兜底） |
+| 9 | QQ 设备选择 | 配置文件无设备选择信息（仅网络参数）。**待管理员在 QQ 设置→音视频确认有无设备下拉框**：有→按原方案；无→退而求其次改 Windows 默认设备（全局生效，体验降级） |
+| 10 | 音频 IO 实现 | **Python worker**（sounddevice+faster-whisper 备胎+requests），零编译、崩溃隔离；项目已有 jm_worker.py 的 IPC 先例 |
+| 11 | TTS | **EmotionTTS（IndexTTS 系，UP 主服务，有余额）主选**；edge-tts 免费兜底；StepFun 音色复刻/本地 CosyVoice（4060 可跑）为 M2 音色升级路线 |
+| 12 | 回声处理 | 实测暂未出现，仍做：TTS 播放期间采集门控 + 朋友端建议耳机；必要时上 WebRTC AEC（speexdsp） |
+
+**验证路径（先于真通话）**：QQ 里放视频/语音（扬声器=CABLE-A）→ bridge 采集→ASR→小鲸鱼→TTS→CABLE-B→耳机听全链路，通过后再拉群友。
+
+---
+
 ## 一、背景与目标
 
 群友已经对机器人产生感情，"给小鲸鱼打电话"是当前最优先需求。约束与既有决策：
@@ -91,10 +112,10 @@ CABLE-A 采集(PCM 48k) → VAD(能量+静音, 400ms 端点, 最短1s/最长15s)
 | 环节 | 延迟 |
 |---|---|
 | VAD 端点检测 | ~300ms |
-| ASR（本地 whisper small，短句） | ~500-800ms |
+| ASR（StepFun 双向流式，首包） | ~300-500ms |
 | LLM 首 token | ~400ms |
-| TTS 首包（edge-tts 流式） | ~300ms |
-| **合计** | **~1.5-2s** |
+| TTS 首包（EmotionTTS/edge-tts 流式） | ~300-500ms |
+| **合计** | **~1.3-1.7s** |
 
 升级路径：阿里云实时 ASR（流式，300ms）+ CosyVoice 本地流式 → 可压到 ~1s。**不上 S2S 黑盒模型**：工具调用、人格控制、记忆在小鲸鱼的大脑侧，S2S 作为可选"嘴耳"模块未来以 source/sink 形式挂接（人格桥接），不替换大脑。
 
@@ -158,14 +179,14 @@ plugins/voice-bridge/
     ├── profiles.js  # Profile 定义（见第三节）
     ├── audio.js     # naudiodon 采集/播放/监听外放（编译失败退 python sounddevice worker）
     ├── vad.js       # 端点检测 + 说话门控
-    ├── asr.js       # 对接 media.transcribe（或阿里云实时 ASR）
+    ├── asr.js       # StepFun 双向流式 ASR 客户端（asr-stream，决议7）
     ├── voiceprint.js# 声纹注册/匹配（群通话）
     └── tts.js       # edge-tts → ffmpeg → PCM 流
 ```
 
-- **ASR 复用**：`src/onebot.js` 的 `media.transcribe` capability 已存在（whisper），语音条与通话共用一套，避免双实现。
-- **TTS**：edge-tts 起步（免费、中文自然音色）；音色升级用 CosyVoice 以小鲸鱼现有语音素材克隆"本尊音色"。QQ 原生 AI 语音（`send_group_ai_record`） silk 解码成本高，不作为声桥首选，但保留为群内"说话"工具（纯文本场景）。
-- **音频 IO**：naudiodon（纯 Node PortAudio 绑定，可按设备名打开采集/播放）。若原生模块在 Node 22 编译失败，退 `voice_worker.py`（sounddevice + WS），与现有 `jm_worker.py` 模式一致。
+- **ASR**：StepFun 双向流式 ASR（`asr-stream`，决议 7）——Python worker 维护 WS 长连，VAD 段直接进流。本机无 speech-to-text 插件（`media.transcribe` 无提供者），故挂云不自带替换；`media.transcribe` 能力留给语音条场景未来启用。
+- **TTS**：EmotionTTS（IndexTTS 系，决议 11）主选、edge-tts 兜底；mp3 经 ffmpeg CLI 转 PCM 播放（EdgeTTS 直出 raw PCM 时免转码）。音色升级路线：StepFun 音色复刻 or 本地 CosyVoice 3（RTX 4060 Laptop 可跑）。
+- **音频 IO**：**Python worker**（`voice_worker.py`，sounddevice，决议 10）——采集 CABLE-A / 播放 CABLE-B / 管理员物理麦侦听混音；与 QQ-agent 经 WS 或 stdin/stdout JSON 通信（参照 jm_worker.py 模式）。零编译、音频侧崩溃不拖垮机器人。
 - **回复出口**：hook `session-reply`（或等价点）把 `send_message` 的文本镜像到 `voice.say(text)`，由当前 Profile 的 TTS 播出。
 
 ## 九、扩展路线
@@ -247,7 +268,7 @@ git push -u origin feature/voice-bridge
 | 浏览器 `webkitSpeechRecognition` | 流式 | 免费 | 仅 hotline profile |
 | 阿里云「实时 ASR + 声纹检索」（AnalyticDB） | 流式 | 按量 | 群通话声纹的云替代方案（本地方案优先） |
 
-**推荐**：M1 复用 whisper → M2 换 paraformer-zh-streaming；本地 CPU 吃紧就上百炼 qwen3-asr-flash（0.79元/小时+10小时免费，几乎免费）。
+**推荐（已定稿，决议 7）**：**StepFun 双向流式 ASR（`asr-stream`）**——与 LLM 同厂商同余额，流式首包快；本地 whisper/faster-whisper 仅作断网备胎。百炼 qwen3-asr-flash（0.79元/小时+10小时免费）为云备选。
 
 ### C.3 TTS（语音合成）选型
 
@@ -260,7 +281,7 @@ git push -u origin feature/voice-bridge
 | 火山豆包语音 / 百炼 CosyVoice API | 低 | 商业级音色多 | 按量，便宜 |
 | QQ 原生 AI 语音（`send_group_ai_record`） | 群内场景 | 30+ 固定音色 | 免费，但 silk 解码成本高 |
 
-**推荐**：edge-tts 起步 → CosyVoice 3 用小鲸鱼现有语音素材克隆本尊音色（本地有 GPU 最佳，没有就用百炼 API）。
+**推荐（已定稿，决议 11）**：**EmotionTTS（IndexTTS 系，UP 主服务，有余额）主选**；edge-tts 免费兜底；M2 音色升级走 StepFun 音色复刻 or 本地 CosyVoice 3（RTX 4060 Laptop 8G 可跑，克隆小鲸鱼本尊音色）。
 
 ### C.4 S2S 实时语音 API（备用挂件，不替换大脑）
 

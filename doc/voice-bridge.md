@@ -17,7 +17,7 @@
 | 6 | 无声纹陌生人 | 人格层自然处理（"你谁啊"），不特殊编码 |
 | 7 | ASR | **StepFun 双向流式 ASR（`asr-stream`）**，与 LLM 同厂商同余额；edge-tts 同级不涉及。Python worker 维护 WS 长连 |
 | 8 | ffmpeg | 装 CLI：`winget install -e --id Gyan.FFmpeg`（TTS mp3→PCM 转码；EdgeTTS 若直出 raw PCM 则兜底） |
-| 9 | QQ 设备选择 | 配置文件无设备选择信息（仅网络参数）。**待管理员在 QQ 设置→音视频确认有无设备下拉框**：有→按原方案；无→退而求其次改 Windows 默认设备（全局生效，体验降级） |
+| 9 | QQ 设备选择 | **已确认**：QQ 语音通话中可切换麦克风/听筒（管理员 2026-10-10 实测），通话内选设备即可，不动系统默认。另发现本机有**立体声混音**，可用免费单电缆方案（见第四节 B 案） |
 | 10 | 音频 IO 实现 | **Python worker**（sounddevice+faster-whisper 备胎+requests），零编译、崩溃隔离；项目已有 jm_worker.py 的 IPC 先例 |
 | 11 | TTS | **EmotionTTS（IndexTTS 系，UP 主服务，有余额）主选**；edge-tts 免费兜底；StepFun 音色复刻/本地 CosyVoice（4060 可跑）为 M2 音色升级路线 |
 | 12 | 回声处理 | 实测暂未出现，仍做：TTS 播放期间采集门控 + 朋友端建议耳机；必要时上 WebRTC AEC（speexdsp） |
@@ -88,12 +88,32 @@
 
 ## 四、Windows 音频接线（实施步骤）
 
-1. 安装 VB-Cable A + B（vb-audio，个人使用 donationware），安装后重启音频应用。
-2. QQ 设置 → 音视频：**扬声器 = CABLE-A Input，麦克风 = CABLE-B Output**。
-3. **管理员戴耳机**：否则自己的声音从扬声器绕回 CABLE-A，小鲸鱼会听见管理员自言自语并接话。戴耳机后 CABLE-A 里只有对端声音，是最廉价可靠的 AEC。
-4. 管理员手动接听 → 群/托盘发「接听」→ 声桥按当前 Profile 开始工作；「挂断」结束。
+### A 案：双虚拟声卡（VB-CABLE A+B，需小额捐赠，采集最干净）
 
-**回声策略**：TTS 播放期间采集端门控静音（它说话时不听）。真正的插话打断（barge-in）留给 `hotline` profile——浏览器端用 WebRTC AEC 可自然实现，不动 QQ 链路。
+1. 装 VB-CABLE A+B（vb-audio 官网捐赠流程，自行定价），重启音频应用。
+2. QQ 通话内：**扬声器 = CABLE-A Input，麦克风 = CABLE-B Output**（QQ 语音可切设备，已实测）。
+3. 声桥：采集 CABLE-A Output（朋友原声，无系统杂音）；TTS 播放到 CABLE-B Input；同时把采集外放到管理员耳机（监听）。
+4. 管理员戴耳机（防自己的声音绕回采集端）。
+
+### B 案：免费单电缆 + 立体声混音（本机可用，M1 先用）
+
+本机已确认有**立体声混音**采集设备 + 已装免费 VB-CABLE（基础版）：
+
+| 角色 | 设备 | 说明 |
+|---|---|---|
+| QQ 扬声器 | 系统默认播放（耳机） | 管理员直接听到朋友 |
+| **采集源** | **立体声混音** | 默认播放的混音 = 朋友的声音（TTS 不在默认播放上，采不到自己） |
+| QQ 麦克风 | CABLE Output | 接机器人的声音 |
+| TTS 播放目标 | CABLE Input | → CABLE Output → QQ 麦克风 |
+| 管理员自己的声音 | 物理麦“侦听此设备”→ CABLE Input | 与 TTS 混合，管理员也能在通话里说话 |
+
+优点：零成本；TTS 不会被自己采集到（无自激）。缺点：立体声混音会混入其他系统声音（微信提示音等），通话时需静音其他应用；要干净采集时再升级 A 案（A+B）。
+
+### 通用
+
+- VB-CABLE 安装：`E:\QQRobot\tools\VBCABLE_Base\VBCABLE_Setup_x64.exe` 管理员运行，**装完重启**。A+B 包需在 vb-audio 商店捐赠后从 "My Download" 获取。
+- 回声策略（决议 12）：TTS 播放期间采集端门控静音（它说话时不听）；朋友端建议戴耳机。
+- 管理员手动接听 → 群/托盘发「接听」→ 声桥按当前 Profile 开始工作；「挂断」结束。
 
 ## 五、处理管线
 

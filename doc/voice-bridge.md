@@ -112,6 +112,7 @@
 ### 通用
 
 - VB-CABLE 安装：`E:\QQRobot\tools\VBCABLE_Base\VBCABLE_Setup_x64.exe` 管理员运行，**装完重启**。A+B 包需在 vb-audio 商店捐赠后从 "My Download" 获取。
+- ⚠️ **从自动化/沙箱启动 QQ-Agent 的坑**：若环境变量里有 `ELECTRON_RUN_AS_NODE=1`（部分 agent 沙箱会注入），electron 会被当纯 Node 跑，主进程 link 阶段崩在 `Cannot read properties of undefined (reading 'exports')` 且不写 boot-diag。启动前先 `Remove-Item Env:ELECTRON_RUN_AS_NODE`。用户双击 bat 不受影响。
 - 回声策略（决议 12）：TTS 播放期间采集端门控静音（它说话时不听）；朋友端建议戴耳机。
 - 管理员手动接听 → 群/托盘发「接听」→ 声桥按当前 Profile 开始工作；「挂断」结束。
 

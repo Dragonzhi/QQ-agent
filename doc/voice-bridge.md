@@ -251,7 +251,7 @@ plugins/voice-bridge/
 1. **设备名 mojibake**：「立体声混音」等中文设备名是 GBK/UTF-8 错位字节，中文子串匹配不可靠 → 默认采集关键词用 ASCII 锚点 `Realtek HD Audio 2nd output`
 2. **`f'max_{kind}channels'` 少下划线**：字典键是 `max_output_channels`，少一个下划线导致永远匹配不上（自检全 FAIL 的根因）
 3. **WDM-KS 设备只能回调式打开**：RawInputStream / 无 callback 的 InputStream 报 `Blocking API not supported yet`，必须带 callback
-4. **强杀开着 WDM-KS 流的进程会废掉设备**：变 Invalid device 直到重启音频服务/电脑 → worker 采集流随开关开合 + 插件杀进程前先发 capture:off 等 400ms
+4. **WDM-KS 立体声混音「开」不坏、「关」才坏**（2026-10-11 二次实测）：流一旦 close 就变 Invalid device 直到重启电脑；本机网易虚拟音频设备也不是直通声卡（输入输出不互通）。对策：worker 采集流**只开一次永不关闭**（软件门控替代开关流）+ 打开失败退避重试；**长期稳定方案仍是 VB-CABLE A+B（A 案）**——MME 设备无此毛病
 5. **VAD 噪声底会被启动瞬间的语音污染**：阈值飙高永远检测不到 → 持续慢速跟踪 + 封顶 1200
 6. **setup() 里读不到自己的配置**：技能此时还没进 registry，`api.config()` 返回 `{}` → 读配置和拉 worker 延后到 `activate()`
 7. **StepFun ASR/TTS 暂不可用**：ASR 402 quota_exceeded、TTS 400 schema 不明 → M1 用 faster-whisper + edge-tts 免费本地栈，StepFun 留待在 profile 里换回

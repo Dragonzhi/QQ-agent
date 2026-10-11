@@ -31,8 +31,12 @@ const PROFILE_COERCERS = {
   slimPrompt: (v) => Boolean(v),                     // 默认 true（由插件默认值给出）
   callMaxRounds: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
   callWakeDelayMs: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
+  // 热闹时的通话聚批窗口（见 orchestrator.scheduleWake 的自适应）
+  callWakeDelayBusyMs: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
   bargeIn: (v) => Boolean(v),                         // 默认 false
-  autoAnswer: (v) => Boolean(v)                       // 默认 true（插件给默认值）
+  autoAnswer: (v) => Boolean(v),                       // 默认 true（插件给默认值）
+  // 群通话降发言欲（默认 false：1v1 里每句都是对你说的，开了会在正常电话里装死）
+  groupCallQuiet: (v) => Boolean(v)
 };
 
 /** 归一 profile 补丁：undefined 的键跳过，认识的键按类型收。 */
@@ -157,6 +161,7 @@ export class VoiceBus {
           return;
         }
         this.lastActivity = Date.now();
+        this._lastTranscriptAt = Date.now();   // 回复"时效"的起点：一句话进来 = 这一轮开始
         this._autoAnswered = false;   // 有人真的说话了 → 不再是"疑似误触发"
         this._turnT0 = Date.now();   // 首字延迟起点：转写进来 = 模型开始跑
         this._turnN = (this._turnN || 0) + 1;   // 期间注入了 N 句（>1 时下面的数字是下限）
@@ -275,7 +280,9 @@ export class VoiceBus {
     this.speaking = true;   // 门控：播放期间不上行
     this.lastActivity = Date.now();
     this._saySeq += 1;
-    this.#sendToWorker({ type: 'say', id: this._saySeq, texts });
+    // inputTs = 这一批回复是"回应哪一刻的对话"。worker 靠它判断回复是不是已经过期
+    // （2026-10-11 群里实测：人多时回复会排队，安静后集中念出来的是几分钟前的事）。
+    this.#sendToWorker({ type: 'say', id: this._saySeq, texts, inputTs: this._lastTranscriptAt || 0 });
     return { sent: texts.map((text) => ({ text, messageId: null, at: Date.now() })), failed: [] };
   }
 

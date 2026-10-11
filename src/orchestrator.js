@@ -165,6 +165,7 @@ export class Orchestrator {
    * 与 contextLimit 对不上账）。窗口只是聚批，不是判定窗口。
    */
   onIncoming(chatKey, entry = null) {
+    if (String(chatKey).startsWith('call:')) this.#noteCallPace();
     if (this.paused || this.aborted) return;
     // 运行中 / 倒计时中：消息保持未读（不判定、不重置），由会话结束的
     // drain 路径补判定（见 wake 末尾的 drain 注释）。
@@ -219,15 +220,43 @@ export class Orchestrator {
    * reuseSessionId（原地重试）与 drainBacklogAfterResume（恢复积压）仍走本函数，
    * 但它们是"已确定要跑"的调用，直接排定时器即可。
    */
+  /**
+   * 通话"节奏"追踪：记下最近每句转写进来的时刻（自适应聚批用，见 scheduleWake）。
+   * 只留最近 10 秒，判断"此刻是不是一堆人在说话"。
+   */
+  #noteCallPace() {
+    const now = Date.now();
+    if (!this.callPace) this.callPace = [];
+    this.callPace.push(now);
+    while (this.callPace.length && now - this.callPace[0] > 10000) this.callPace.shift();
+  }
+
+  /** 通话是不是"热闹"：最近 10 秒 ≥3 句。安静时用短窗口（响应快），热闹时用长窗口（合成一轮）。 */
+  #callBusy() {
+    const now = Date.now();
+    if (!this.callPace) this.callPace = [];
+    while (this.callPace.length && now - this.callPace[0] > 10000) this.callPace.shift();
+    return this.callPace.length >= 3;
+  }
+
   scheduleWake(chatKey, delay = null, { reuseSessionId = null, verified = false } = {}) {
     // 语音通话不需要"防抖聚批"：人说话是一句一句的，等 2 秒聚批在电话里就是纯沉默。
     // 实测这条白等了 2.0s（2026-10-11 通话延迟排障），通话会话默认降到 200ms，
     // 具体值可由 voice-bridge 插件设置里的「通话聚批等待」覆盖（voiceProfile）。
     const voiceCall = /^call:/.test(String(chatKey));
     const callDelay = Number(this.voiceProfile?.callWakeDelayMs);
+    // 热闹时把聚批窗口拉长（2026-10-11 群里实测第二轮）：200ms 的窗口下一句就是一轮，
+    // 七嘴八舌 10 秒能生成 4-6 批回复，等大家安静下来再一条条念 —— 内容全是几分钟前的事。
+    // 拉长到 1 秒出头，连续几句就合成一轮，一条回复天然对应"最近这一段"。
+    const busyDelay = Number(this.voiceProfile?.callWakeDelayBusyMs);
+    const busy = voiceCall && this.#callBusy();
+    const effCallDelay = busy && Number.isFinite(busyDelay) && busyDelay > 0 ? busyDelay : callDelay;
     const ms = delay ?? (voiceCall
-      ? (Number.isFinite(callDelay) && callDelay >= 0 ? callDelay : 200)
+      ? (Number.isFinite(effCallDelay) && effCallDelay >= 0 ? effCallDelay : 200)
       : Math.max(0, Number(getConfig().wakeDelayMs) || 2000));
+    if (voiceCall && busy && Number.isFinite(effCallDelay) && effCallDelay !== callDelay) {
+      logger.info('voice-latency', `${chatKey} 通话热闹（最近 10s ${this.callPace?.length || 0} 句）→ 聚批窗口 ${callDelay}ms → ${effCallDelay}ms`);
+    }
     // 不可重置：已在倒计时中就不动它（唯一例外是原地重试——它进来时
     // pendingWake 一定没有该 chatKey，因为 runningChats 刚释放、旧定时器已到期）。
     if (this.pendingWake.has(chatKey)) return;
@@ -748,7 +777,27 @@ export class Orchestrator {
     //   ④ 按次关思考（reasoning token 在电话里就是纯延迟）
     const isVoice = /^call:/.test(String(chatKey));
     if (isVoice) logger.info('voice-latency', `${chatKey} 开始处理（触发 ${triggerEntries?.length || 0} 条）`);
+    // ── 通话"发言欲"（2026-10-11 群里实测第二轮）──────────────────────
+    // 真人在一群人的语音里也不会每句都接话。但它只在**明确标了群通话**时生效：
+    //   ① 插件设置 groupCallQuiet 打开（1v1 打电话别开！1v1 里每句都是对你说的）；
+    //   ② 通话正热闹（最近 10 秒 ≥3 句，同一个 callPace）；
+    //   ③ 这一批话里没点名、也没直接问它。
+    // 为什么必须手动标：协议层拿不到"这通电话有几个人"——1v1 里对方讲一段三分句的话，
+    // 密度判据照样成立，默认识别成"群聊"会让它在正常电话里装死。
+    // 成立时：不强制第 1 轮 send_message（否则它被逼着必须说点什么），
+    // 并在提示词末尾补一句"没人点名就直接 finish"（prompt.js 的 CALL_GUIDE_QUIET_SECTION）。
     const cfg = getConfig();
+    let callQuiet = false;
+    if (isVoice && this.voiceProfile?.groupCallQuiet === true) {
+      const names = [cfg?.persona?.selfNickname, cfg?.persona?.botName, '小鲸鱼', '鲸鱼']
+        .map((x) => String(x || '').trim()).filter(Boolean);
+      const texts = (triggerEntries || []).map((e) => String(e?.text ?? '')).join(' ');
+      const addressed = names.some((n) => texts.includes(n))
+        // 问句也算在跟它说话（"你觉得呢？"）
+        || /[?？]/.test(texts);
+      callQuiet = this.#callBusy() && !addressed;
+      if (callQuiet) logger.info('voice-latency', `${chatKey} 群通话多人闲聊且没点名 → 允许它不出声（发言欲降档）`);
+    }
     // 开一轮新运行：清空回复安全网的候选草稿池（草稿只在"这一次运行"内有意义，
     // 跨运行留着会把上一次的句子当成这次可以发的原句）。
     this.#capFirst('reply.grounded-select')?.({ reset: true });
@@ -787,7 +836,7 @@ export class Orchestrator {
       sessionId: session.id,
       // 通话精简开关（插件设置 slimPrompt）也要经 skillContext 传下去：prompt.js 的
       // system 与 user 两条路径都认这个字段（system 那条另有显式参数 callSlim）
-      ...(isVoice ? { callSlim: this.voiceProfile?.slimPrompt !== false } : {})
+      ...(isVoice ? { callSlim: this.voiceProfile?.slimPrompt !== false, callQuiet } : {})
     };
 
     // Skill 生命周期：提示词组装之前先跑 before-context。
@@ -1058,8 +1107,10 @@ export class Orchestrator {
       const response = await chatCompletionWithRetry({
         messages,
         tools: openAiTools,
-        // 通话第 1 轮强制先说话：不让模型把唯一的轮次花在调查询类工具上
-        ...(isVoice && round === 0
+        // 通话第 1 轮强制先说话：不让模型把唯一的轮次花在调查询类工具上。
+        // ⚠️ 多人闲聊且没点名时（callQuiet）不强制 —— 否则等于逼它必须说点什么，
+        //    "降发言欲"就无从谈起（此时工具白名单只有 send_message/finish，没有副作用）。
+        ...(isVoice && round === 0 && !callQuiet
           ? { toolChoice: { type: 'function', function: { name: 'send_message' } } }
           : {}),
         // 通话按次关思考（llm.js 支持 context.thinkingMode 覆盖，见 src/thinking.js）

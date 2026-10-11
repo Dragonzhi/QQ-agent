@@ -288,19 +288,32 @@ export function filterSectionsForCall(sections, chatKey, callSlim = undefined) {
  * 通话指引段：priority 95 —— 排在核心规则之后、其它技能段之前。
  * ≤120 字：通话是实时语音，指令越短越容易被遵守。
  */
-const CALL_GUIDE_SECTION = {
-  id: 'call-mode-guide',
-  title: '通话模式',
-  priority: 95,
-  content: '你正在打电话：对方说完立刻用 send_message 回一句短的口语（≤20 字），想到什么说什么；'
-    + '不要查资料、不要用其它工具、不要解释自己在做什么。'
-    // 语音是念出来的：emoji/颜文字会被 TTS 念成怪音或直接吞掉，markdown 同理
-    + '这是语音，绝不能出现 emoji、颜文字、表情符号、括号动作或 markdown 符号，只写能直接念出来的中文口语。'
-    // 本地 ASR 会带情绪标签，做成文字前缀进上下文（见 app.js ingestVoiceMessage）
-    + '对方消息可能带「（语气：开心）」这类前缀，那是语音情绪识别的结果，你顺着语气回应就好，不要复述这个前缀。'
-    // 群通话：本地声纹聚类只能分编号，分不清是谁（见 app.js voiceSenderName）
-    + '群通话里如果有多个人，消息会标成「说话人1/2/3」：你分辨得出谁在说谁，但未必知道名字 —— 分不清就用「你」，别把编号念出来；谁自我介绍了就自然记住。'
-};
+const CALL_GUIDE_BASE = '你正在打电话：对方说完立刻用 send_message 回一句短的口语（≤20 字），想到什么说什么；'
+  + '不要查资料、不要用其它工具、不要解释自己在做什么。'
+  // 语音是念出来的：emoji/颜文字会被 TTS 念成怪音或直接吞掉，markdown 同理
+  + '这是语音，绝不能出现 emoji、颜文字、表情符号、括号动作或 markdown 符号，只写能直接念出来的中文口语。'
+  // 本地 ASR 会带情绪标签，做成文字前缀进上下文（见 app.js ingestVoiceMessage）
+  + '对方消息可能带「（语气：开心）」这类前缀，那是语音情绪识别的结果，你顺着语气回应就好，不要复述这个前缀。'
+  // 群通话：本地声纹聚类只能分编号，分不清是谁（见 app.js voiceSenderName）
+  + '群通话里如果有多个人，消息会标成「说话人1/2/3」：你分辨得出谁在说谁，但未必知道名字 —— 分不清就用「你」，别把编号念出来；谁自我介绍了就自然记住。';
+
+/**
+ * 多人闲聊时的补充指引（2026-10-11 群里实测第二轮加的"发言欲"）。
+ *
+ * 真人在一群人的语音里也不会每句都接话 —— 别人互相聊的时候，你插一句"嗯嗯对"
+ * 只会很吵。这条只在"通话正热闹、且这一批话没点名/没提问"时挂上，平时不挂。
+ */
+const CALL_GUIDE_QUIET = '⚠️ 现在群里几个人正在互相聊天：**没点你名、也没问你**的时候，'
+  + '直接调用 finish 别出声（前面那批话已经听到了，记住就行）。'
+  + '只有叫了你的名字、或在问你的时候才开口；开口也只说一句短的，别抢话。';
+
+const CALL_GUIDE_SECTION = { id: 'call-mode-guide', title: '通话模式', priority: 95, content: CALL_GUIDE_BASE };
+/**
+ * ⚠️ 这条必须是**末尾的动态段**（priority 1），不能并进上面那段：
+ * 通话指引在系统提示靠前的位置，而"热闹/不热闹"每几轮就会翻一次 ——
+ * 并进去会让整段系统提示的字节布局来回变，前缀缓存（token 大头）直接归零。
+ */
+const CALL_GUIDE_QUIET_SECTION = { id: 'call-quiet-tip', title: '通话模式（补充）', priority: 1, content: CALL_GUIDE_QUIET };
 
 /**
  * 收集 Skill 提示词片段。
@@ -347,9 +360,12 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   // false = 完全老逻辑（全量段、无指引），undefined = 看 callPrompt.slim 配置。
   const chatKey = String(skillContext?.chatKey ?? '');
   const slimOn = resolveCallSlim(chatKey, callSlim);
+  // 发言欲：通话热闹 + 这批话没点名 → 挂"可以不出声"的指引（见 orchestrator 的 callQuiet）
+  const quietOn = slimOn && skillContext?.callQuiet === true;
   const skillSections = [
     ...filterSectionsForCall(collectSkillSections(skillContext || {}), chatKey, callSlim),
     ...(slimOn ? [CALL_GUIDE_SECTION] : []),
+    ...(quietOn ? [CALL_GUIDE_QUIET_SECTION] : []),   // 动态段殿后（见该常量的注释）
     ...(Array.isArray(extraSections) ? extraSections : [])
   ]
     .map((x) => ({ priority: 50, ...x }))

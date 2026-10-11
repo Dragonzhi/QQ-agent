@@ -345,6 +345,35 @@ M1 跑通后最大的体验问题是"回复慢"。逐环节量了一遍（每行
   另外用 segment 自带的 `no_speech_prob`/`avg_logprob` 过滤低置信段，并对「字幕by…」这类字幕套路做黑名单。
 - **自激回环**：对方外放时自己的 TTS 会绕回采集端 → 用字符集合相似度比对最近 4 句，丢掉重合度 > 0.7 的。
 
+## 十四、本地 GPU ASR（SenseVoice-Small）—— 2026-10-11 接入
+
+**动机**：whisper-small 在 CPU 上 1300-1500ms/句，是首字延迟里最大的一块；实测社区结论也是"中文场景国产模型强于 whisper"。
+
+**方案**：本地 **SenseVoice-Small（234M，FunASR）跑 GPU**，独立 venv + 常驻 sidecar 进程。
+
+| 项 | 值 |
+|---|---|
+| 环境 | `E:\QQRobot\voice-engines\venv`（Python 3.12 + `torch 2.9.1+cu128` + `funasr 1.4.16`），**与 worker 那套 Python 完全隔离** |
+| 模型 | `iic/SenseVoiceSmall`（892MB，ModelScope 缓存，离线可用） |
+| 架构 | `voice-engines/asr_service.py` 常驻进程，stdin/stdout JSON 行协议；worker 启动即预热 |
+| 实测 | 6.84s 音频 **首帧 352ms / 后续 68-78ms**（whisper 1300-1500ms，**约 18 倍**）；模型加载 3.7-4.3s |
+| 显存 | 常驻 **约 1.1GB**（整机占用 1.97GB / 8GB） |
+| 附加能力 | 每句带**情绪标签**（HAPPY/SAD/ANGRY/NEUTRAL…）与**声学事件**（Speech/BGM/Applause/Laughter…） |
+| 韧性 | sidecar 起不来或中途崩 → **自动退回 whisper**（`--asr-engine sensevoice` 默认值不会让通话哑掉） |
+
+**收益**：首字延迟 **2500-3000ms → 1537-1611ms**（2026-10-11 实测，私聊 + 2 人群通话）。
+
+### 踩坑（都已修）
+1. **Windows 上 `select()` 读不了管道**：`OSError WinError 10038`（只认套接字）→ 改「读线程 + `queue.Queue` + timeout」。
+2. **协议流被库日志污染**：funasr/ModelScope 会往 stdout 打下载进度 → 客户端读到非 JSON 首行直接崩。做法：sidecar 启动时 `os.dup(stdout)` 复制一份专供协议，再把 `sys.stdout` 重定向到 stderr。
+3. **ModelScope 锁互锁**：客户端超时被杀但子进程还活着 → 互相 "Still waiting to acquire lock" 卡死。做法：启动失败必 `kill` 子进程；必要时清 `~/.cache/modelscope/.lock`。
+4. **`rich_transcription_postprocess` 会把情绪/事件渲染成 emoji 塞进正文**（实测正文变「🎼我。😊」）→ 改成自己剥标签，情绪/事件单独取；worker 侧再按事件过滤（非 `Speech` 直接丢，噪声/BGM 不再被"听"成文字）。
+5. **专有名词误听**：两家 ASR 都把「小鲸鱼」听成「小金鱼」→ 结果层做 `NAME_FIXES` 修正（比加提示词可靠，提示词还会诱导幻觉）。
+
+### 下一步可用的能力
+- **情绪入戏**：`transcript` 消息已带 `emotion` 字段，总线可以据此写进会话上下文（"对方现在是笑的语气"）。
+- **群通话说话人分离（M3）**：现在是"对方说什么都能听见"（混音），要做"谁在说"需要声纹库（见第六节）。
+
 ---
 
 ## 附录 A：本仓库现有本地核心补丁（fork 基线）

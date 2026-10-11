@@ -50,7 +50,11 @@ release/
 community.key
 
 # 本地插件与技能（个人内容、含第三方来源素材，不进公开仓库）
-# 想版本管理就另建 private 仓库，例如 github.com/Dragonzhi/qq-agent-plugins
+# plugins/ 已单独用私有仓库管理：github.com/Dragonzhi/qq-agent-plugins
+#   ⚠️ 工作区仍是这里的 plugins/，对象库却在 E:\QQRobot\qq-agent-plugins.git
+#      （--separate-git-dir）：应用对 plugins/ 做了 fs.watch(recursive)，把 .git 目录
+#      放进去会让每次 git 操作都触发一轮插件重载。详见 doc/voice-bridge.md 附录 B.1。
+# skills/ 尚未纳入版本管理
 plugins/
 skills/
 

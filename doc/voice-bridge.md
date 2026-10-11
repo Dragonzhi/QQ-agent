@@ -495,6 +495,34 @@ git push -u origin feature/voice-bridge
 # 注意：src/app.js / src/store.js / ui/index.html 有来源待确认的改动，提交前先 git diff 审查
 ```
 
+### B.1 插件私有仓库（2026-10-11 建）
+
+`plugins/` 与 `skills/` 被 `.gitignore` 排除，等于**完全没有版本管理**（改坏了没法回滚）。
+2026-10-11 给 `plugins/` 建了私有仓库：
+
+| 项 | 值 |
+|---|---|
+| 仓库 | https://github.com/Dragonzhi/qq-agent-plugins （**private**） |
+| 工作区 | 仍是 `E:\QQRobot\QQ-agent\plugins\`（应用路径不变） |
+| 对象库 | `E:\QQRobot\qq-agent-plugins.git\`（**在应用目录之外**） |
+| 首个快照 | `3a2dc02`，20 个插件 / 99 个文件 |
+
+⚠️ **为什么不用普通的 `git init`**：插件热重载是 `fs.watch(plugins/, { recursive: true })`
+（`src/plugin-loader.js`），**这个目录里任何文件变动都会触发一次插件重载**。`.git/` 一旦放进来，
+每次 `add/commit/gc` 都会刷出一轮重载（历史上就是这个坑刷出过 1753 次 spawn）。所以用：
+
+```powershell
+git init --separate-git-dir=E:\QQRobot\qq-agent-plugins.git -b main E:\QQRobot\QQ-agent\plugins
+git -C E:\QQRobot\QQ-agent\plugins remote add origin https://github.com/Dragonzhi/qq-agent-plugins.git
+git -C E:\QQRobot\QQ-agent\plugins push -u origin main
+```
+
+`plugins/.git` 因此只是一个 **40 字节的文件**（`gitdir: E:/QQRobot/qq-agent-plugins.git`），
+不是目录 —— 插件加载只扫目录，不会把它当插件。
+
+日常照常在 `plugins/` 里 `git status/add/commit/push` 即可（git 顺着那个文件找对象库）。
+`skills/` 目前仍未纳入版本管理，要的话照同一套再来一遍。
+
 ## 附录 C：调研结论（2026-10-10）
 
 ### C.1 类似项目 / 先例

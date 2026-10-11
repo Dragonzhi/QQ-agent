@@ -297,6 +297,28 @@ export function createApp({ log = console.log } = {}) {
     return path.join(qqPortableDir(), 'QQ.exe');
   }
 
+  /**
+   * 便携 QQ 的启动参数。
+   *
+   * 可选加 `--remote-debugging-port`：用于**只读**探测 QQ 客户端的数据层
+   * （通话时"谁在说话"这个状态在渲染进程 JS 里，声纹聚类猜不准的东西它本来就知道）。
+   * 默认关闭；开启方式：data/config.json 里加 `"qqPortable": { "debugPort": 9222 }`。
+   * 只绑 127.0.0.1（Electron 默认行为），不对局域网开放；用完可以删掉这个键。
+   */
+  function qqPortableArgs(dataDir) {
+    const args = [`--user-data-dir=${dataDir}`];
+    try {
+      const port = Number(getConfig()?.qqPortable?.debugPort) || 0;
+      if (port > 0 && port < 65536) {
+        args.push(`--remote-debugging-port=${port}`);
+        pushQqLog(`便携 QQ 以调试端口 ${port} 启动（仅供本机只读探测）`);
+      }
+    } catch (error) {
+      pushQqLog(`读取 qqPortable.debugPort 失败：${error?.message ?? error}`, 'stderr');
+    }
+    return args;
+  }
+
   function pushQqLog(text, stream = 'stdout') {
     const line = { at: Date.now(), stream, text: String(text ?? '').replace(/\r?\n$/, '') };
     if (!line.text) return;
@@ -408,7 +430,7 @@ export function createApp({ log = console.log } = {}) {
       fs.mkdirSync(dataDir, { recursive: true });
 
       try {
-        const child = spawn(exe, [`--user-data-dir=${dataDir}`], {
+        const child = spawn(exe, qqPortableArgs(dataDir), {
           cwd: qqPortableDir(),
           stdio: ['ignore', 'pipe', 'pipe'],
           windowsHide: false, // QQ 需要显示窗口让用户扫码

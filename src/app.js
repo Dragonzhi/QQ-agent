@@ -698,20 +698,21 @@ export function createApp({ log = console.log } = {}) {
   };
 
   /**
-   * 通话里的"说话人"显示名。
+   * 通话里的发送者显示名：**一律「通话对方」**。
    *
-   * 本地声纹聚类给出的只有编号（S1/S2…），不知道是谁。1v1 时没必要显示编号，
-   * 一律叫"通话对方"；**一旦出现第二个声音**，才启用"说话人1/2/3"，
-   * 让模型能区分"谁在说"，也让会话记录能看出是多人在聊。
-   * （编号按首次出现的顺序固定，同一通电话里不会变。）
+   * 原来这里会在出现第二个声音后用本地声纹聚类的编号显示「说话人1/2/3」。2026-10-11
+   * 决定下线：真实通话里聚类会过度分裂（同一个人被拆成 S3/S4/S5），大厂公开横评 DER
+   * 也有 5.6%~27%，小项目投入产出不划算。
+   *
+   * 也考虑过从 QQ 客户端数据层拿（通话窗口里说话人头像会亮）——调研结论是不行：
+   *   · LiteLoaderQQNT 官方仓库已归档，README 自己警告"QQ 安全中心可能判定为非法
+   *     外挂工具、下线设备、甚至封号"（社区有 #1032/#1051 实例）；
+   *   · 通话的音频链路在 `avsdk\AVSDKPlugin.dll`（PPAPI 插件，独立进程、C++ 实现），
+   *     JS 插件注入不进去 → 拿不到逐人音轨，也拿不到"谁在说话"的数据源；
+   *   · 详情见 doc/voice-bridge.md 第十五节。
    */
-  const callSpeakerSeen = new Map();   // chatKey -> Map<label, 序号>
-  function voiceSenderName(chatKey, label) {
-    if (!label) return '通话对方';
-    let seen = callSpeakerSeen.get(chatKey);
-    if (!seen) { seen = new Map(); callSpeakerSeen.set(chatKey, seen); }
-    if (!seen.has(label)) seen.set(label, seen.size + 1);
-    return seen.size <= 1 ? '通话对方' : `说话人${seen.get(label)}`;
+  function voiceSenderName() {
+    return '通话对方';
   }
 
   function ingestVoiceMessage(text, meta = {}) {
@@ -724,8 +725,7 @@ export function createApp({ log = console.log } = {}) {
       mid: -(Date.now() % 2147483647),
       ts: Date.now(),
       senderId: target,
-      senderName: voiceSenderName(chatKey, String(meta.speaker || ''))
-        || (target === 'test' ? '自测' : '通话对方'),
+      senderName: voiceSenderName(),
       text: body,
       media: [],
       atMe: true,

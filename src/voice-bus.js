@@ -31,7 +31,8 @@ const PROFILE_COERCERS = {
   slimPrompt: (v) => Boolean(v),                     // 默认 true（由插件默认值给出）
   callMaxRounds: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
   callWakeDelayMs: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
-  bargeIn: (v) => Boolean(v)                         // 默认 false
+  bargeIn: (v) => Boolean(v),                         // 默认 false
+  autoAnswer: (v) => Boolean(v)                       // 默认 true（插件给默认值）
 };
 
 /** 归一 profile 补丁：undefined 的键跳过，认识的键按类型收。 */
@@ -67,6 +68,7 @@ export class VoiceBus {
     this.target = '';            // 1v1 绑定的对方 QQ 号（worker hello 带来）
     this.speaking = false;       // TTS 播放中 → 门控生效
     this.capturing = false;      // 是否正在采集（通话中）
+    this._autoAnswered = false;  // 本次通话是不是"自动接听"开的（误触发自愈用）
     this.lastActivity = Date.now();
 
     /** 上行转写回调：(text:string) => void，由 app.js 注入 ingestVoiceMessage */
@@ -155,6 +157,7 @@ export class VoiceBus {
           return;
         }
         this.lastActivity = Date.now();
+        this._autoAnswered = false;   // 有人真的说话了 → 不再是"疑似误触发"
         this._turnT0 = Date.now();   // 首字延迟起点：转写进来 = 模型开始跑
         this._turnN = (this._turnN || 0) + 1;   // 期间注入了 N 句（>1 时下面的数字是下限）
         if (HANGUP_RE.test(text)) {
@@ -185,6 +188,21 @@ export class VoiceBus {
           this._turnT0 = 0;
           this._turnN = 0;
         }
+        break;
+
+      case 'auto-answer':
+        // 空闲期（没采集）听到人声 + 最近有过来电铃声 → 自动开始采集。
+        // 用户只需在 QQ 上点一次"接听"，我们这层全自动；不是电话就没人说话，
+        // 铃声这一点还顺带排除了"放音乐误触发"。插件设置 autoAnswer 可关。
+        if (ws !== this.worker) return;
+        if (this.capturing) return;
+        if (this.profile?.autoAnswer === false) {
+          this.log('[voice] 检测到人声，但插件设置里关掉了自动接听');
+          return;
+        }
+        this.log(`[voice] 自动接听：空闲期检测到人声（${String(msg.text || '').slice(0, 20)}）`);
+        this._autoAnswered = true;      // 误触发自愈用：90 秒没人说话就自己关掉
+        this.startCapture();
         break;
 
       case 'status':
@@ -287,6 +305,13 @@ export class VoiceBus {
 
   #checkIdle() {
     if (!this.capturing) return;
+    // 自动接听开起来的通话：90 秒内一句人声都没有 → 自己关掉（误触发自愈）。
+    // 手动接听的会话不受这条约束（用户可能在安静等人），仍走 idleTimeoutMs。
+    if (this._autoAnswered && Date.now() - this.lastActivity > 90000) {
+      this.log('[voice] 自动接听后 90 秒无人说话 → 自动停止采集（疑似误触发）');
+      this.hangup('自动接听无内容');
+      return;
+    }
     if (Date.now() - this.lastActivity > this.idleTimeoutMs) {
       this.hangup(`空闲 ${Math.round(this.idleTimeoutMs / 60000)} 分钟`);
     }

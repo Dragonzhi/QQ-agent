@@ -125,11 +125,18 @@ function resolveProviderEndpoint(providerId) {
  * 构建"主模型 + 备选模型"的候选请求序列。
  * 第一项永远是当前主模型；之后按 api.fallbackModels 顺序追加。
  * 每项是一个可直接传给 chatCompletion 的 overrides 对象。
+ *
+ * @param {object|null} base 调用方指定的端点覆盖（如语音通话专用模型）。
+ *   传了就作为第一候选，并在末尾补一个"回落主模型"的候选 —— 专用模型不存在
+ *   或不允许时（404/401 属不可重试错误，会直接跳到下一候选）不至于整通电话哑掉。
+ *   ⚠️ 以前这个参数不存在，`chatCompletionWithRetry({ overrides })` 会被这里
+ *   静默丢掉（候选表第一项的 overrides 是 null，展开时覆盖掉调用方的），
+ *   表现为"配了通话模型却完全没生效"。
  */
-function buildCandidateApis() {
+function buildCandidateApis(base = null) {
   const cfg = getConfig();
   const main = effectiveApi();
-  const candidates = [{ overrides: null, label: main.model || '(未设置模型)' }];   // null = 用 effectiveApi()
+  const candidates = [{ overrides: base, label: (base?.model || main.model) || '(未设置模型)' }];
   const fallbacks = Array.isArray(cfg.api?.fallbackModels) ? cfg.api.fallbackModels : [];
   for (const fb of fallbacks) {
     const model = String(fb?.model ?? '').trim();
@@ -147,6 +154,7 @@ function buildCandidateApis() {
       candidates.push({ overrides: { ...main, model }, label: model });
     }
   }
+  if (base) candidates.push({ overrides: { ...main }, label: `${main.model}（回落主模型）` });
   return candidates;
 }
 
@@ -208,7 +216,9 @@ export function isRetryableError(error) {
  *   调用方据此同步 session.model / session.vendor，保证成本看板的「渠道:模型」同源。
  */
 export async function chatCompletionWithRetry(args, retries = 2) {
-  const candidates = buildCandidateApis();
+  // args.overrides（调用方指定的端点/模型，如语音通话专用模型）必须参与候选表，
+  // 否则会被候选表第一项的 null 覆盖掉 —— 见 buildCandidateApis 的注释。
+  const candidates = buildCandidateApis(args?.overrides || null);
   let lastError = null;
 
   for (let ci = 0; ci < candidates.length; ci++) {

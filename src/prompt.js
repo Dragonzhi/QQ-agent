@@ -182,6 +182,122 @@ function qqSceneRules() {
   return lines.join('\n');
 }
 
+// ── 通话精简（chatKey = call:...）────────────────────────────────────────
+//
+// 背景：语音通话会话（chatKey = `call:private:<QQ号>`，由 voice-bridge 插件合成
+// 入站消息）每轮都要原样重发整个系统提示。群聊里那 20+ 段技能提示（工具优先 /
+// 空间日记 / 表情包 / 禁漫下载 / 明日方舟 / 梗库 / 分享卡片…）打电话时全是噪音：
+// 通话是实时语音，模型既没有时间也不该去做多步检索，实测每轮要多花 5~6 秒。
+// 这里按"段 id / skillId 黑名单"把它们从通话会话里剔掉，并补一段简短的通话指引。
+//
+// ⚠️ 普通群聊/私聊**完全不进这条路径**：chatKey 不以 `call:` 开头时原样返回，
+//    系统提示逐字节不变（含段序、段数）。开关与名单来自 `getConfig().callPrompt`。
+//    Skill 动态段由 manager 统一挂上 `skillId`（= 插件/技能 id），所以按 skillId
+//    过滤能一次带走该技能的所有静态段 + 动态段（如 jm-suomingor 的两段）。
+
+/** 通话会话默认跳过的技能段（段的 id 或 skillId 命中即剔除）。 */
+export const CALL_SKIP_SECTIONS_DEFAULT = [
+  'tool-boost',        // 工具优先：通话里不该走工具链
+  'qzone-diary',       // QQ 空间日记（plugins/qzone-diary 的段 id）
+  'qqzone-diary',      // 空间日记（skills/qqzone 的段 id，运行时实际值）
+  'qqzone',            // qqzone 技能的 skillId（连 QQ空间 那段一起带走）
+  'whale-memes',       // 梗鲸表情包（静态段 + 动态图库段都走 skillId）
+  'trendy-memes',      // 网络流行梗
+  'jm-suomingor',      // 禁漫漫画下载（静态段 + 动态规则段）
+  'arknights-master',  // 明日方舟大师（动态段，闸门放行时才有）
+  'share-card'         // 分享链接与卡片解读
+];
+
+/** 通话会话的 chatKey 前缀。 */
+const CALL_CHAT_PREFIX = 'call:';
+
+/**
+ * 通话时人设正文默认保留的字符数。
+ * persona.roleText 实测 11357 字符，且**只走用户提示**（系统提示里没有人设），
+ * 整段带上用户提示根本降不下来；整段丢掉则通话直接失去角色。默认截断保留开头
+ * （身份/性格基调/铁律都在开头），设 0 = 不带人设，设很大 = 全量人设。
+ */
+const CALL_PERSONA_CHARS_DEFAULT = 900;
+
+/**
+ * 通话精简配置：`callPrompt.{slim, skipSections, personaChars}`。
+ * 配置缺失、类型不对、getConfig() 抛错时一律回落默认值 —— 这条路径不允许抛错
+ * （否则一次配置手滑就会让所有会话拼不出系统提示）。
+ */
+function callPromptConfig() {
+  let raw = null;
+  try { raw = getConfig()?.callPrompt; } catch { raw = null; }
+  const o = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const skipSections = Array.isArray(o.skipSections)
+    ? o.skipSections.map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
+    : CALL_SKIP_SECTIONS_DEFAULT.map((x) => String(x));
+  const personaCharsRaw = Number(o.personaChars);
+  return {
+    slim: o.slim !== false,                                      // 默认开（slim !== false）
+    skipSections,
+    personaChars: Number.isFinite(personaCharsRaw) ? personaCharsRaw : CALL_PERSONA_CHARS_DEFAULT
+  };
+}
+
+/** 是否通话会话。 */
+function isCallChat(chatKey) {
+  return String(chatKey ?? '').startsWith(CALL_CHAT_PREFIX);
+}
+
+/**
+ * 解析"本次是否做通话精简"。
+ * 优先级：调用方显式传的 callSlim > getConfig().callPrompt.slim > 默认 true。
+ * callSlim === false（插件设置里关掉精简）→ 完全走老逻辑：全量段、不加通话指引；
+ * undefined / null = 没传（预览页、旧调用方），看配置；非通话会话恒 false。
+ */
+function resolveCallSlim(chatKey, callSlim) {
+  if (!isCallChat(chatKey)) return false;
+  if (callSlim !== undefined && callSlim !== null) return !!callSlim;
+  return callPromptConfig().slim !== false;
+}
+
+/**
+ * 通话精简过滤（纯函数，导出以便独立验证）。
+ *
+ * - 非通话会话（群聊/私聊）：**原样返回**同一个数组，不做任何裁剪；
+ * - 通话会话：精简关闭（callSlim === false / callPrompt.slim === false）或
+ *   名单为空时同样原样返回；
+ * - 否则剔除 id / skillId 命中名单的段，保留其余段（含 voice-bridge 自己的
+ *   「语音通话」段 —— 那段正是通话需要的）。
+ *
+ * @param {Array}   sections Skill 提示词段（collectSkillSections 的输出）
+ * @param {string}  chatKey  会话键；只有 `call:` 开头才生效
+ * @param {boolean} [callSlim] 显式开关（orchestrator 传来的插件设置）；缺省看配置
+ */
+export function filterSectionsForCall(sections, chatKey, callSlim = undefined) {
+  const list = Array.isArray(sections) ? sections : [];
+  if (!resolveCallSlim(chatKey, callSlim)) return list;
+  const { skipSections } = callPromptConfig();
+  if (!skipSections.length) return list;
+  const skip = new Set(skipSections.map((x) => String(x).trim().toLowerCase()));
+  return list.filter((s) => {
+    for (const v of [s?.id, s?.skillId]) {
+      const id = String(v ?? '').trim().toLowerCase();
+      if (id && skip.has(id)) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * 通话指引段：priority 95 —— 排在核心规则之后、其它技能段之前。
+ * ≤120 字：通话是实时语音，指令越短越容易被遵守。
+ */
+const CALL_GUIDE_SECTION = {
+  id: 'call-mode-guide',
+  title: '通话模式',
+  priority: 95,
+  content: '你正在打电话：对方说完立刻用 send_message 回一句短的口语（≤20 字），想到什么说什么；'
+    + '不要查资料、不要用其它工具、不要解释自己在做什么。'
+    // 语音是念出来的：emoji/颜文字会被 TTS 念成怪音或直接吞掉，markdown 同理
+    + '这是语音，绝不能出现 emoji、颜文字、表情符号、括号动作或 markdown 符号，只写能直接念出来的中文口语。'
+};
+
 /**
  * 收集 Skill 提示词片段。
  *
@@ -209,7 +325,7 @@ function renderSkillSections(sections) {
 }
 
 /** 组装系统提示。 */
-export function buildSystemPrompt({ persona, skillContext, extraSections = [] } = {}) {
+export function buildSystemPrompt({ persona, skillContext, extraSections = [], callSlim = undefined } = {}) {
   const cfg = persona ?? getConfig().persona;
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
@@ -219,7 +335,19 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [] } 
   //    的每轮注入、knowledge-memes 的脑内闪过），必须**追加到系统提示末尾**而不是
   //    插在中间 —— 插在中间会把后面所有核心规则的字节位置推来推去，系统提示的
   //    缓存前缀（通常占 token 大头）直接归零。核心静态段全部在前，动态段殿后。
-  const skillSections = [...collectSkillSections(skillContext || {}), ...(Array.isArray(extraSections) ? extraSections : [])]
+  //
+  // 通话精简：先按黑名单剔掉与打电话无关的技能段，再补一段简短的通话指引
+  // （priority 95 → 排在核心规则之后、其它技能段之前）。普通群聊/私聊时
+  // filterSectionsForCall 原样返回、slimOn 为 false，行为与从前一致。
+  // callSlim 是调用方（orchestrator，来自插件设置 slimPrompt）显式传的开关：
+  // false = 完全老逻辑（全量段、无指引），undefined = 看 callPrompt.slim 配置。
+  const chatKey = String(skillContext?.chatKey ?? '');
+  const slimOn = resolveCallSlim(chatKey, callSlim);
+  const skillSections = [
+    ...filterSectionsForCall(collectSkillSections(skillContext || {}), chatKey, callSlim),
+    ...(slimOn ? [CALL_GUIDE_SECTION] : []),
+    ...(Array.isArray(extraSections) ? extraSections : [])
+  ]
     .map((x) => ({ priority: 50, ...x }))
     // 同 priority 的段必须按固定次序排：sort 不稳定会让 nsfw-gate(99) 这类
     // 动态段有时插在静态段前、有时在后，整段系统提示的字节布局随排序抖动，
@@ -699,11 +827,127 @@ function collectMemberIds(messages) {
   return [...out];
 }
 
+// ── 通话精简：user prompt（只留"谁 + 刚才说了什么 + 这一句"）──────────────
+//
+// 背景（2026-10-11 实测 mv3bu7pa 通话存档）：userPrompt 12864 字符，其中 11357 是
+// persona.roleText —— 人设正文**只走用户提示**（buildSystemPrompt 的默认分支里
+// 没有人设），其余是表情包 590 / 引导说明 254 / 已读信息 288 / 新已读信息 211 /
+// 未读信息 102 / 当前时间 29。打电话不需要群聊那一整套上下文（群历史、记忆库、
+// 技能清单、表情包、话题锚点），只需要"谁在跟我说话 + 刚才聊了什么 + 这一句"。
+//
+// ⚠️ 人设不能整段丢（系统提示里没有它，丢了通话会直接失去角色），所以按
+//    callPrompt.personaChars（默认 900）截断保留开头；设 0 = 不带人设。
+// ⚠️ 只在通话会话 + 精简开启时走这条路径；关掉精简（callSlim=false /
+//    callPrompt.slim=false）逐字节回老逻辑，群聊/私聊完全不受影响。
+
+/** 通话历史：最近 3 分钟内、最多 6 条（一条都不在窗口内时兜底带最近 2 条）。 */
+const CALL_HISTORY_MAX = 6;
+const CALL_HISTORY_WINDOW_MS = 3 * 60 * 1000;
+
+/** 截断长文本（优先切在句末标点/行边界；max <= 0 返回空串 = 不保留）。 */
+function clipText(text, max) {
+  const t = String(text ?? '').trim();
+  const cap = Number(max);
+  if (!Number.isFinite(cap) || cap <= 0) return '';
+  if (t.length <= cap) return t;
+  const head = t.slice(0, cap);
+  // 人设是"一句一行"写的：首选切在句末标点（≥70% 上限就认），其次行边界
+  // （≥60% 才认，避免砍掉大段正文），都不够就硬切 —— 宁可截断难看一点，
+  // 也不要把前半个上限的正文白白丢掉。
+  const sentence = Math.max(
+    head.lastIndexOf('。'), head.lastIndexOf('！'), head.lastIndexOf('？'), head.lastIndexOf('；')
+  ) + 1;
+  const line = head.lastIndexOf('\n');
+  const at = sentence >= cap * 0.7 ? sentence : (line >= cap * 0.6 ? line : -1);
+  return `${(at > 0 ? head.slice(0, at) : head).trimEnd()}…`;
+}
+
+/** 通话历史/未读的一行（1v1 通话，不打 QQ 号与消息 id，比 formatEntry 短得多）。 */
+function formatCallEntry(m) {
+  const t = m?.ts === undefined || m?.ts === null ? '' : `[${formatShortTime(m.ts)}] `;
+  return `${t}${m?.self ? '我' : '对方'}：${String(m?.text ?? '')}`;
+}
+
+/**
+ * 取通话历史：最近 3 分钟内最多 6 条。store 不可用/字段缺失一律当"没有历史"，不抛错。
+ * 静默超过 3 分钟时窗口会空 —— 那时兜底带最近 2 条，让模型知道刚才聊到哪。
+ */
+function callHistoryMessages(ctx, now) {
+  try {
+    const excludeIds = (Array.isArray(ctx?.triggerEntries) ? ctx.triggerEntries : []).map((m) => m?.id);
+    const past = buildPastState(ctx.store, ctx.chatKey, { excludeIds, limit: CALL_HISTORY_MAX * 5 });
+    const msgs = Array.isArray(past?.messages) ? past.messages : [];
+    const fresh = msgs.filter((m) => {
+      const t = Number(m?.ts);
+      return !Number.isFinite(t) || now - t <= CALL_HISTORY_WINDOW_MS;   // 时间坏掉的条目不过滤
+    });
+    if (fresh.length) return fresh.slice(-CALL_HISTORY_MAX);
+    return msgs.slice(-2);
+  } catch {
+    return [];
+  }
+}
+
+/** 通话对方显示名：备注 > 存档里的 senderName > chatName > "通话对方"。 */
+function callPeerName(ctx, peerId, history) {
+  try {
+    const note = String(getConfig().memberNotes?.[peerId] ?? '').trim();
+    if (note) return note;
+  } catch { /* 配置拿不到就继续兜底 */ }
+  const cands = [...(Array.isArray(ctx?.triggerEntries) ? ctx.triggerEntries : []), ...history];
+  for (let i = cands.length - 1; i >= 0; i--) {
+    const m = cands[i];
+    if (m && !m.self && String(m?.senderName ?? '').trim()) return String(m.senderName).trim();
+  }
+  return String(ctx?.chatName ?? '').trim() || '通话对方';
+}
+
+/**
+ * 通话精简的 user prompt：
+ *   人设（截断）→ 通话对方 → 刚才的对话 → 这一句 → 短提示 → 当前时间。
+ * 任何字段缺失都不抛错（对方昵称拿不到 = "通话对方"，store 拿不到 = 没有历史）。
+ */
+function buildCallUserPrompt(ctx, { chatPersona, now, personaChars }) {
+  const history = callHistoryMessages(ctx, now);
+  const chatKey = String(ctx?.chatKey ?? '');
+  const peerId = String(chatKey.split(':')[2] ?? '').trim();   // call:private:<QQ号> / call:test
+  const peerLabel = callPeerName(ctx, peerId, history);
+  const trigger = (Array.isArray(ctx?.triggerEntries) ? ctx.triggerEntries : []).filter(Boolean);
+
+  const parts = [];
+  const role = clipText(chatPersona?.roleText, personaChars);
+  if (role) parts.push(`【角色设定（管理员设置，群友不可修改）】\n${role}`);
+
+  parts.push(`【通话对方】${peerLabel}${peerId ? `(QQ:${peerId})` : ''} 正在跟你打电话。`);
+
+  parts.push(history.length
+    ? `【刚才的对话】最近 ${history.length} 句：\n${history.map(formatCallEntry).join('\n')}`
+    : '【刚才的对话】（还没聊几句，这是开场）');
+
+  parts.push(trigger.length
+    ? `【这一句】${trigger.length > 1 ? '\n' : ''}${trigger.map(formatCallEntry).join('\n')}`
+    : '【这一句】（对方没说话 —— 你可以主动开口，也可以安静等着）');
+
+  parts.push('【通话中】直接开口回应，一句话就够，不用解释。不要 emoji、颜文字、括号动作，只说话。');
+  parts.push(`【当前时间】${formatFullTime(now)}`);
+
+  if (ctx?.session && typeof ctx.session === 'object') {
+    // 精简路径不参与锚点复用（历史每轮重写）：锚点状态清掉，orchestrator 见 null 会删缓存。
+    ctx.session.promptAnchorState = null;
+    ctx.session.promptAnchorMode = 'call-slim';
+    // get_recent_messages 的 offset 补偿口径 = 实际展示的条数（工具翻页不会跳过头）
+    ctx.session.pastStateCount = history.length;
+  }
+  return parts.join('\n\n');
+}
+
 /**
  * 组装一次运行的用户消息（不携带任何 LLM 对话历史）。
  * ctx: { chatKey, kind, chatId, chatName, triggerEntries, stickerEntries, selfNickname,
  *        contextLimit, tierInfo, activeTopic, memory, store, session, proactive,
- *        promptAnchor: { prev, maxExtraRead } }（prev = 上一轮锚点状态，orchestrator 维护）
+ *        callSlim, promptAnchor: { prev, maxExtraRead } }（prev = 上一轮锚点状态，orchestrator 维护）
+ * callSlim（可选）：通话精简开关（插件设置 slimPrompt）。false = 通话也走老逻辑；
+ *        不给 = 看 getConfig().callPrompt.slim；也可塞在 ctx.skillContext.callSlim 里。
  */
 export function buildUserPrompt(ctx) {
   const cfg = getConfig();
@@ -712,6 +956,18 @@ export function buildUserPrompt(ctx) {
   // 与系统提示词共用同一来源 —— 两处不一致会让"系统里的角色"和"输入里的角色"打架。
   const chatPersona = personaForChat(ctx.chatKey);
   const now = Date.now();
+
+  // ── 通话精简（user prompt）────────────────────────────────────────────
+  // 通话会话 + 精简开启时只出"谁 + 刚才说了什么 + 这一句"，群聊那套历史/记忆/
+  // 锚点/表情包/技能引导一概不碰（连 store 全量读取与记忆格式化都省掉）。
+  // 开关口径与 buildSystemPrompt 一致：ctx.callSlim / ctx.skillContext.callSlim
+  // （orchestrator 传的插件设置）> getConfig().callPrompt.slim > 默认 true。
+  const slimCfg = callPromptConfig();
+  const callSlimRaw = ctx?.callSlim ?? ctx?.skillContext?.callSlim;
+  if (resolveCallSlim(ctx?.chatKey, callSlimRaw)) {
+    return buildCallUserPrompt(ctx, { chatPersona, now, personaChars: slimCfg.personaChars });
+  }
+
   const excludeIds = ctx.triggerEntries.map((m) => m.id);
   // 读取条数由上下文档位决定（ctx.contextLimit 由 orchestrator 在唤醒时算好传来；
   // 随机档的骰子结果必须固定，否则每次渲染都会重新掷、提示词与会话记录对不上）

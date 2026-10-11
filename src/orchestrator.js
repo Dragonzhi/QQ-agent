@@ -9,6 +9,7 @@
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig, storeConfigForChat, personaForChat } from './config.js';
+import { logger } from './logger.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
@@ -219,7 +220,14 @@ export class Orchestrator {
    * 但它们是"已确定要跑"的调用，直接排定时器即可。
    */
   scheduleWake(chatKey, delay = null, { reuseSessionId = null, verified = false } = {}) {
-    const ms = delay ?? Math.max(0, Number(getConfig().wakeDelayMs) || 2000);
+    // 语音通话不需要"防抖聚批"：人说话是一句一句的，等 2 秒聚批在电话里就是纯沉默。
+    // 实测这条白等了 2.0s（2026-10-11 通话延迟排障），通话会话默认降到 200ms，
+    // 具体值可由 voice-bridge 插件设置里的「通话聚批等待」覆盖（voiceProfile）。
+    const voiceCall = /^call:/.test(String(chatKey));
+    const callDelay = Number(this.voiceProfile?.callWakeDelayMs);
+    const ms = delay ?? (voiceCall
+      ? (Number.isFinite(callDelay) && callDelay >= 0 ? callDelay : 200)
+      : Math.max(0, Number(getConfig().wakeDelayMs) || 2000));
     // 不可重置：已在倒计时中就不动它（唯一例外是原地重试——它进来时
     // pendingWake 一定没有该 chatKey，因为 runningChats 刚释放、旧定时器已到期）。
     if (this.pendingWake.has(chatKey)) return;
@@ -732,6 +740,14 @@ export class Orchestrator {
   }
 
   async #runAgent(session, { kind, chatId, chatKey, triggerEntries, proactive, seq, contextLimit = null, tierInfo = null, activeTopic = null }) {
+    // 语音通话（call:private:<QQ号>）走"实时档"：电话里每多一轮 LLM = 几秒沉默。
+    // 与群聊的差异集中在四处（都在本函数内，便于 fork 上游合并）：
+    //   ① scheduleWake 的聚批等待 2000ms → 200ms（见 scheduleWake）
+    //   ② 工具白名单只留 send_message/finish（89 个工具的 schema 是两万多 token）
+    //   ③ 第 1 轮强制 toolChoice=send_message，且首批发出即收尾（省掉纯 finish 那一轮）
+    //   ④ 按次关思考（reasoning token 在电话里就是纯延迟）
+    const isVoice = /^call:/.test(String(chatKey));
+    if (isVoice) logger.info('voice-latency', `${chatKey} 开始处理（触发 ${triggerEntries?.length || 0} 条）`);
     const cfg = getConfig();
     // 开一轮新运行：清空回复安全网的候选草稿池（草稿只在"这一次运行"内有意义，
     // 跨运行留着会把上一次的句子当成这次可以发的原句）。
@@ -768,7 +784,10 @@ export class Orchestrator {
       visionEnabled,
       searchEnabled,
       proactive,
-      sessionId: session.id
+      sessionId: session.id,
+      // 通话精简开关（插件设置 slimPrompt）也要经 skillContext 传下去：prompt.js 的
+      // system 与 user 两条路径都认这个字段（system 那条另有显式参数 callSlim）
+      ...(isVoice ? { callSlim: this.voiceProfile?.slimPrompt !== false } : {})
     };
 
     // Skill 生命周期：提示词组装之前先跑 before-context。
@@ -818,6 +837,10 @@ export class Orchestrator {
     const systemPrompt = buildSystemPrompt({
       skillContext,
       persona: ownerPersona || personaForChat(chatKey),
+      // 通话精简提示词（插件设置里的 slimPrompt，默认开）：电话里不需要那 20 多个
+      // 跟通话无关的技能段（表情包/空间日记/禁漫/明日方舟…），它们既拖慢 prefill
+      // 又跟"秒回"打架。传 undefined 让 prompt.js 走它自己的默认值。
+      callSlim: isVoice ? this.voiceProfile?.slimPrompt !== false : undefined,
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]
         : []
@@ -888,7 +911,7 @@ export class Orchestrator {
     // 以前这里手写五层条件，加 Skill 后如果继续手写就会变成六层、两处各判一半。
     // 现在统一交给 getToolAvailability()，并把不可用原因写进会话（UI 可解释）。
     const availability = new Map();
-    const toolDefs = this.toolDefs.filter((d) => {
+    let toolDefs = this.toolDefs.filter((d) => {
       const st = getToolAvailability(d.id, {
         skills: skillManager,
         toolsCfg,
@@ -904,6 +927,18 @@ export class Orchestrator {
       .filter(([, st]) => !st.enabled)
       .map(([id, st]) => ({ id, code: st.code, reason: st.reason }));
     session.excludedTools = excluded;
+    // 语音通话：工具白名单只留"说话/收尾"。默认 89 个工具的 schema 要 2 万多 token
+    // （实测每轮 32.7k prompt tokens），而且 tool-boost 那段"先查后答"的硬规则会
+    // 怂恿它去搜索 —— 电话里没有"先查资料"这个选项，只有"快说话"。
+    if (isVoice) {
+      const allow = new Set(['send_message', 'finish']);
+      const before = toolDefs.length;
+      toolDefs = toolDefs.filter((d) => allow.has(d.id));
+      session.excludedTools = [...excluded, ...this.toolDefs
+        .filter((d) => !allow.has(d.id))
+        .map((d) => ({ id: d.id, code: 'call-narrowed', reason: '语音通话：只保留说话与结束' }))];
+      logger.info('voice-latency', `工具裁剪：${before} → ${toolDefs.length}（通话模式）`);
+    }
     const openAiTools = toOpenAiTools(toolDefs);
 
     const ctx = {
@@ -922,7 +957,10 @@ export class Orchestrator {
       emit: (type, payload) => this.emit(type, payload)
     };
 
-    const maxRounds = Math.max(1, Number(cfg.api.maxRounds) || 12);
+    // 通话最多 N 轮（默认 2，配合下面"首批发出即收尾"，正常情况 1 轮就够）；
+    // 轮数可在插件设置里调（voiceProfile.callMaxRounds）
+    const callRounds = Math.max(1, Number(this.voiceProfile?.callMaxRounds) || 2);
+    const maxRounds = isVoice ? callRounds : Math.max(1, Number(cfg.api.maxRounds) || 12);
     let finish = false;
     let webSearchCount = 0;
     session.activity = '';
@@ -997,7 +1035,43 @@ export class Orchestrator {
       // 网络抖动/5xx/429 会自动重试（同一轮请求，messages 不变，幂等不重复发言）。
       // abortSignal：会话级中止时在途请求立即断开 —— isRetryableError 把
       // "中止"判为不可重试，chatCompletionWithRetry 不再打下一发，直接上抛。
-      const response = await chatCompletionWithRetry({ messages, tools: openAiTools, skillContext, signal: abortSignal });
+      const llmT0 = Date.now();
+      // 通话专用模型：插件设置里的 callModel / callProviderId（留空=主模型）。
+      // 实测 step-5-preview 连"43 token 输入 + 7 字回复"都要 4.9 秒（重型推理模型），
+      // 换 step-3.5-flash 后同样的 15.5k token 提示词 4.27s → 2.69s。
+      let callOverrides = null;
+      if (isVoice) {
+        const p = this.voiceProfile || {};
+        const wantModel = String(p.callModel || '').trim();
+        if (wantModel && wantModel !== cfg.api.model) {
+          const pid = String(p.callProviderId || cfg.api.provider || '').trim();
+          const prov = currentProviders().find((x) => x.id === pid) || {};
+          callOverrides = {
+            baseUrl: prov.baseURL || cfg.api.baseUrl,
+            apiKey: (getConfig().dshProviderKeys || {})[pid] || prov.apiKey || cfg.api.apiKey,
+            model: wantModel,
+            provider: pid
+          };
+          logger.info('voice-latency', `通话专用模型 ${wantModel} @ ${pid}`);
+        }
+      }
+      const response = await chatCompletionWithRetry({
+        messages,
+        tools: openAiTools,
+        // 通话第 1 轮强制先说话：不让模型把唯一的轮次花在调查询类工具上
+        ...(isVoice && round === 0
+          ? { toolChoice: { type: 'function', function: { name: 'send_message' } } }
+          : {}),
+        // 通话按次关思考（llm.js 支持 context.thinkingMode 覆盖，见 src/thinking.js）
+        skillContext: isVoice ? { ...skillContext, thinkingMode: 'off' } : skillContext,
+        ...(callOverrides ? { overrides: callOverrides } : {}),
+        signal: abortSignal
+      });
+      if (isVoice) {
+        logger.info('voice-latency', `round${round + 1} llm=${Date.now() - llmT0}ms `
+          + `model=${response.model || ''} tools=${(response.message?.tool_calls || []).length} `
+          + `promptChars=${session.promptChars || 0}`);
+      }
       session.model = response.model || session.model;
       // 渠道与模型必须同源：fallback 可以配另一个 provider，只更新 model 会把
       // 这次调用记到主渠道名下，导致按渠道拆分的成本报表误导用户。
@@ -1250,6 +1324,14 @@ export class Orchestrator {
             }
           } catch (error) { skillManager.recordError('reply-safety', error); }
         }
+      }
+      // ── 通话内置收尾策略：这一批已经把话发出去了，就别再跑一轮 ──
+      // 实测那通电话的第 2 轮只调了一个 finish，白等 2.0 秒才出声。reply-safety
+      // 插件没装时上面那段是空操作，所以这里给通话补一条内置规则。
+      if (!finish && isVoice && session.sent.length > sentBeforeBatch) {
+        finish = true;
+        session.finishReason = session.finishReason || '语音通话：本批已交付，提前收尾';
+        logger.info('voice-latency', '首批已发送 → 提前收尾（省掉一轮 LLM）');
       }
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
       // 媒体消息跟随在全部 tool 结果之后（OpenAI 校验要求每个 tool_call 都有对应 tool 消息）

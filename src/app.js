@@ -656,6 +656,9 @@ export function createApp({ log = console.log } = {}) {
     warn: (...a) => console.warn(...a)
   });
   sender.voiceBus = voiceBus;   // sender 拦截 call:* 会话时用
+  // 插件设置页的「通话档」经控制连接 config 消息送到总线，这里转交给 orchestrator
+  // （orchestrator 就在上面构造，普通对象直接挂属性；通话开始时它读 voiceProfile）
+  voiceBus.onProfile = (p) => { orchestrator.voiceProfile = p; };
   voiceBus.onTranscript = (text) => ingestVoiceMessage(text);
   voiceBus.start();
 

@@ -17,6 +17,35 @@ import { WebSocketServer } from 'ws';
 /** 语音口令挂断（保守词表：正常人聊天不会误触） */
 const HANGUP_RE = /(挂断|挂了吧|先挂了|挂电话|不用打电话了)/;
 
+/**
+ * 通话档（profile）白名单：插件设置界面 → 控制连接 `config` 消息 → orchestrator。
+ *
+ * 只收这里列出的键（不认识的键直接丢，防止前端塞垃圾字段进总线状态），
+ * 值类型按表归一（string 去首尾空格、boolean 取真值、number 只认有限数字）。
+ * 语义：callModel / callProviderId 为空串 = 用主模型 / 主 provider（归一后仍是空串，
+ * 判空交给 orchestrator，总线不做业务判断）。
+ */
+const PROFILE_COERCERS = {
+  callModel: (v) => String(v ?? '').trim(),          // 空 = 主模型
+  callProviderId: (v) => String(v ?? '').trim(),     // 空 = 主 provider
+  slimPrompt: (v) => Boolean(v),                     // 默认 true（由插件默认值给出）
+  callMaxRounds: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
+  callWakeDelayMs: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined),
+  bargeIn: (v) => Boolean(v)                         // 默认 false
+};
+
+/** 归一 profile 补丁：undefined 的键跳过，认识的键按类型收。 */
+function normalizeProfile(patch = {}) {
+  const out = {};
+  if (!patch || typeof patch !== 'object') return out;
+  for (const [key, coerce] of Object.entries(PROFILE_COERCERS)) {
+    if (patch[key] === undefined) continue;
+    const value = coerce(patch[key]);
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 export class VoiceBus {
   /**
    * @param {object} opts
@@ -44,6 +73,13 @@ export class VoiceBus {
     this.onTranscript = null;
     /** 状态变化回调：() => void */
     this.onStateChange = null;
+    /**
+     * 通话档：插件设置界面里那些"通话专用"的参数（callModel/slimPrompt/...）。
+     * 控制连接发来 config 消息时按白名单增量并入；orchestrator 每次通话读它。
+     */
+    this.profile = {};
+    /** 通话档变化回调：(profile:object, ws:WebSocket) => void，由 app.js 转发给 orchestrator */
+    this.onProfile = null;
 
     this._idleTimer = null;
     this._saySeq = 0;
@@ -113,11 +149,14 @@ export class VoiceBus {
         if (ws !== this.worker) return;
         const text = String(msg.text || '').trim();
         if (!text) return;
-        if (this.speaking) {
+        // 播放期默认门控（防自激）；插件设置里开了「允许打断」就放行
+        if (this.speaking && this.profile?.bargeIn !== true) {
           this.log(`[voice] 门控丢弃（TTS 播放中）：${text.slice(0, 30)}`);
           return;
         }
         this.lastActivity = Date.now();
+        this._turnT0 = Date.now();   // 首字延迟起点：转写进来 = 模型开始跑
+        this._turnN = (this._turnN || 0) + 1;   // 期间注入了 N 句（>1 时下面的数字是下限）
         if (HANGUP_RE.test(text)) {
           this.hangup('语音口令');
           return;
@@ -129,6 +168,17 @@ export class VoiceBus {
       case 'played':
         // worker 播完一批 → 开门
         if (ws === this.worker) this.speaking = false;
+        break;
+
+      case 'play-start':
+        // 首字延迟真值：转写进来 → 第一段音频开始播（含 LLM 全部轮次 + TTS）
+        if (ws === this.worker && this._turnT0) {
+          const n = this._turnN || 1;
+          this.log(`[voice] 首字延迟 ${Date.now() - this._turnT0}ms（转写→第一段开口`
+            + `${n > 1 ? `；期间又注入了 ${n - 1} 句，此数为下限` : ''}）`);
+          this._turnT0 = 0;
+          this._turnN = 0;
+        }
         break;
 
       case 'status':
@@ -152,12 +202,18 @@ export class VoiceBus {
         this.hangup(msg.reason || '控制端');
         break;
 
-      case 'config':
-        // 控制连接同步插件设置（目前仅 idleMinutes）
+      case 'config': {
+        // 控制连接同步插件设置：idleMinutes 保持原行为（只认正数），
+        // 其余通话档键按白名单并入 this.profile。插件 reload 后会重复发同一条
+        // config —— 这里是幂等覆盖，重复收到结果不变。
         if (Number(msg.idleMinutes) > 0) {
           this.idleTimeoutMs = Number(msg.idleMinutes) * 60 * 1000;
         }
+        const patch = normalizeProfile(msg);
+        if (Object.keys(patch).length) this.profile = { ...this.profile, ...patch };
+        try { this.onProfile?.(this.profile, ws); } catch (e) { this.warn(`[voice] profile 转发出错: ${e?.message ?? e}`); }
         break;
+      }
 
       default:
         break;

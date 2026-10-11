@@ -502,9 +502,28 @@ export function createRoutes(deps) {
         try {
           const body = await bodyOf(req);
           const submitted = String(body.apiKey ?? '').trim();
-          const apiKey = (submitted && submitted !== '******') ? submitted : resolveApiKey(getConfig());
           const baseUrl = String(body.baseUrl ?? '');
           const model = String(body.model ?? '');
+          // ⚠️ 掩码（******）时不能直接用"当前主模型渠道"的 key：用户测的可能是别的
+          // 渠道，拿主渠道的 key 去打 → 401 Invalid 'Authorization' header or token。
+          // 实测踩坑（2026-10-11）：设置页点 commandcode 的「测试」，界面上 key 是
+          // 掩码，结果一直 401，换 key 也没用 —— 其实打过去的是 stepfun 的 key。
+          // 现在按"被测渠道"解析：优先 body.providerId，其次按 baseUrl 反查。
+          let apiKey = (submitted && submitted !== '******') ? submitted : '';
+          if (!apiKey) {
+            const cfg = getConfig();
+            const norm = (u) => String(u || '').trim().replace(/\/+$/, '').toLowerCase();
+            const pid = String(body.providerId ?? '').trim();
+            const prov = (cfg.providers || []).find((p) => (pid && p.id === pid)
+              || (baseUrl && norm(p.baseURL) === norm(baseUrl)));
+            if (prov) {
+              const fromDsh = String(cfg.dshProviderKeys?.[prov.id] ?? '').trim();
+              const legacy = String(prov.apiKey ?? '').trim();
+              apiKey = (fromDsh && fromDsh !== '******') ? fromDsh
+                : ((legacy && legacy !== '******') ? legacy : '');
+            }
+            if (!apiKey) apiKey = resolveApiKey(cfg);   // 兜底：仍是当前主渠道的 key
+          }
           const result = await testModelChat({ baseUrl, apiKey, model });
           // 「思考方言」由内置方言表识别（原 thinking-adapters 插件收编进核心）。
           // 接在这里是为了让用户在"测试连通性"时就能看到这个模型会走哪套思考参数，

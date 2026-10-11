@@ -674,6 +674,72 @@ data/voice-bridge-tts.json   ← worker 每句开口前现读（改完下一句�
 
 ---
 
+## 二十、音色落地：本地千早爱音（GSV-TTS-Lite + 你训练的 V2 模型）—— 2026-10-11 深夜
+
+**结果**：小鲸鱼现在用**爱音的声音说中文**，首包延迟从 edge-tts 的 **1346ms** 降到 **中位 350ms**，
+显存多占 **1.4GB**（+SenseVoice 1.1GB = 2.5GB / 8GB）。
+
+### 音色包（`E:\QQRobot\爱音`）
+
+| 文件 | 作用 |
+|---|---|
+| `千早爱音V2-e30.ckpt`（148MB） | **GPT** 权重（韵律/语气） |
+| `千早爱音V2_e20_s460.pth`（81MB） | **SoVITS** 权重（音色） |
+| `AnonV2/`（89 个 wav，32kHz 单声道，5-8 秒） | 参考音频 |
+| `AnonV2.list`（90 行） | **带官方日文台词的转写** —— 正好是 GPT-SoVITS 的 `prompt_audio_text` |
+
+⚠️ 这是 **V2** 模型（能用！）。之前调研里提到 B站那个 MYGO 包是 **V4**，V4 **没有真流式**
+（源码原话"SoVits V3/4模型不支持流式推理模式，已自动回退到分段返回模式"）——两者别搞混。
+
+**跨语言**：GPT-SoVITS 把音色（SoVITS 权重）和语言（`text_language`）解耦，所以
+**日语训练的爱音模型说中文完全正常**：`text_language='zh'` + 参考音频的 `prompt_language='ja'`。
+
+### 实测（都在本机 4060 Laptop，`tools/bench_anon_real.py`）
+
+| 场景 | 首包 | 说明 |
+|---|---|---|
+| **新句子**（机器人的真实情况） | **中位 350ms**（145-611） | 8 句各说一遍 |
+| 重复同一句 | 中位 143ms | 说明有文本级缓存，别拿这个数当体验 |
+| 整句合成总时长 | 320-896ms | RTF ≈ 0.1 |
+| 对比 edge-tts | 1346ms | 快约 **4 倍** |
+| 显存 | 1.08GB 常驻 / 1.33GB 峰值 | |
+| 冷启动 | **10-18 秒**（模型加载 + 8 种长度预热） | 所以必须常驻 |
+
+### 三个踩坑（都值一顿饭）
+
+1. **`boost_first_chunk=True` 是个陷阱**（名字骗人）：参数扫描（`tools/_sweep_gsv.py`）
+   显示 chunk=25 + boost=True 时**短句首包 605ms**，boost=False 只要 191ms；
+   chunk=12 + boost=False → 最稳（128-141ms/首块 0.38s）。默认值是 True，**必须手动关**。
+2. **推理必须固定在同一条线程上**：实测（`tools/_probe_thread.py`）主线程首包 133ms，
+   换一条**新线程**第一次要 557ms（第二次才 110ms）—— 每条新线程都要付一次 ~450ms 的
+   CUDA Graph / stream 初始化代价。而 `ThreadingHTTPServer` 是**每个请求开一条新线程**，
+   于是每个请求都在付这笔钱 → 服务稳定卡在 540ms。
+   **对策：单条常驻推理线程 + 队列**，HTTP 线程只转发（流式照样成立）→ 146ms。
+3. **预热要覆盖多种句长**：捕获代价跟文本长度相关，只热一句短的，第一通电话里
+   每冒出一个新句长就卡一下。现在启动时跑 8 种长度（4~40 字）预热，约 8 秒。
+
+### 架构（复用了十九节的可插拔后端，worker 侧零改动）
+
+```
+gsv_service.py（常驻，独立 venv）  ←HTTP(GET, 裸 PCM 32k 单声道)—  声桥 worker
+   千早爱音 V2 模型 + 单推理线程         inputFormat: s16le/32000/1     ffmpeg → CABLE
+```
+
+| 设置 | 值 |
+|---|---|
+| `ttsEngine` | `anon`（本地爱音）/ `edge`（云端兜底） |
+| `ttsServicePython` | `E:\QQRobot\voice-engines\gsv-lite\Scripts\python.exe`（独立 venv，**没动 SenseVoice 那个**） |
+| `ttsServiceScript` | `E:\QQRobot\voice-engines\gsv_service.py` |
+| `ttsServicePort` | 9880 |
+
+插件负责拉起/看护这个服务（pid 文件 + 掉线 8 秒重拉 + 禁用时一起停）；
+`data/voice-bridge-tts.json` 由插件按设置生成，worker 每句现读。
+**本地服务挂了会自动退回 edge-tts**，通话不会哑。
+
+试听：`python tools/demo_anon.py` → `tools/爱音试听.mp3`。
+
+---
+
 ## 附录 A：本仓库现有本地核心补丁（fork 基线）
 
 上游 `K0nd1us/QQ-agent` 更新会覆盖 `src/`，以下补丁需在 fork 中固化为提交，丢失时按此重打：

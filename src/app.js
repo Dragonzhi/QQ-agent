@@ -659,24 +659,52 @@ export function createApp({ log = console.log } = {}) {
   // 插件设置页的「通话档」经控制连接 config 消息送到总线，这里转交给 orchestrator
   // （orchestrator 就在上面构造，普通对象直接挂属性；通话开始时它读 voiceProfile）
   voiceBus.onProfile = (p) => { orchestrator.voiceProfile = p; };
-  voiceBus.onTranscript = (text) => ingestVoiceMessage(text);
+  voiceBus.onTranscript = (text, meta) => ingestVoiceMessage(text, meta);
   voiceBus.start();
 
   /**
    * 通话转写 → 合成入站消息（与 OneBot 入站平级的入口）。
    * chatKey = call:private:<target>：orchestrator 视作私聊（全接），
    * sender 拦截后经 TTS 播放回通话，不发 QQ。
+   *
+   * meta.emotion 来自本地 ASR（SenseVoice）的情绪标签。语音没有表情和语气词，
+   * 模型只能靠文字猜情绪 —— 这里把它变成文字前缀，让"对方在笑/在生气"进得了上下文。
    */
-  function ingestVoiceMessage(text) {
+  const VOICE_EMOTION_LABEL = {
+    HAPPY: '开心', SAD: '低落', ANGRY: '生气', SURPRISED: '惊讶',
+    FEARFUL: '紧张', DISGUSTED: '不耐烦'
+  };
+
+  /**
+   * 通话里的"说话人"显示名。
+   *
+   * 本地声纹聚类给出的只有编号（S1/S2…），不知道是谁。1v1 时没必要显示编号，
+   * 一律叫"通话对方"；**一旦出现第二个声音**，才启用"说话人1/2/3"，
+   * 让模型能区分"谁在说"，也让会话记录能看出是多人在聊。
+   * （编号按首次出现的顺序固定，同一通电话里不会变。）
+   */
+  const callSpeakerSeen = new Map();   // chatKey -> Map<label, 序号>
+  function voiceSenderName(chatKey, label) {
+    if (!label) return '通话对方';
+    let seen = callSpeakerSeen.get(chatKey);
+    if (!seen) { seen = new Map(); callSpeakerSeen.set(chatKey, seen); }
+    if (!seen.has(label)) seen.set(label, seen.size + 1);
+    return seen.size <= 1 ? '通话对方' : `说话人${seen.get(label)}`;
+  }
+
+  function ingestVoiceMessage(text, meta = {}) {
     const target = voiceBus.target || 'test';
     const chatKey = `call:private:${target}`;
+    const label = VOICE_EMOTION_LABEL[String(meta.emotion || '').toUpperCase()];
+    const body = label ? `（语气：${label}）${text}` : text;
     const entry = store.appendIncoming(chatKey, {
       // 合成 mid：取负数避免与真实 QQ 消息 id 撞（存档/引用都按 mid 查）
       mid: -(Date.now() % 2147483647),
       ts: Date.now(),
       senderId: target,
-      senderName: target === 'test' ? '自测' : '通话对方',
-      text,
+      senderName: voiceSenderName(chatKey, String(meta.speaker || ''))
+        || (target === 'test' ? '自测' : '通话对方'),
+      text: body,
       media: [],
       atMe: true,
       atNames: []

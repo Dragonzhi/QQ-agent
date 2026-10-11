@@ -161,7 +161,13 @@ export class VoiceBus {
           this.hangup('语音口令');
           return;
         }
-        try { this.onTranscript?.(text); } catch (e) { this.warn(`[voice] 转写处理出错: ${e?.message ?? e}`); }
+        try {
+          this.onTranscript?.(text, {
+            emotion: String(msg.emotion || ''),
+            event: String(msg.event || ''),
+            speaker: String(msg.speaker || '')
+          });
+        } catch (e) { this.warn(`[voice] 转写处理出错: ${e?.message ?? e}`); }
         break;
       }
 

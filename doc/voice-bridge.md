@@ -268,7 +268,10 @@ v0.2 相对 v0.1 的改动（2026-10-11 排障后重构）：
 6. 插件加 **pid 文件单例门闩** + `PYTHONUTF8=1`（否则中文日志全变乱码）+ 日志 2MB 轮转；
 7. 自测脚本 `E:\QQRobot\tools\e2e_full.py` 改成**从 worker 日志读它实际打开的回环端点，播到同一个端点**，并给出 PASS/PARTIAL/FAIL 判定。
 
-**待验证**：VAD→whisper→转写→会话→LLM→TTS 播回全链路（需要一通真实的 QQ 通话，或跑 e2e 自测）。
+**首通真实通话验证（2026-10-11 中午）**：上行链路全通——手机说话 → 回环采集（峰值 3000-9000）→ 转写（`小鲸鱼。`/`鲸鱼娘。`，1.4s）→ 会话注入（chatKey=`call:private:3248569738`）→ 小鲸鱼回复（`在呢`/`怎么啦`/`鲸鱼娘来啦~`）。
+暴露并已修的问题：① 下行**完全听不到**（见踩坑 14，MME 静默丢音）；② 幻觉转写（踩坑 15）；③ 忙时丢段（踩坑 16）。
+
+**待验证**：修好播放通道后的第二通电话（下行是否真的送进 QQ 麦克风）。
 
 ### 实施踩坑记录（已写进代码注释）
 
@@ -285,6 +288,19 @@ v0.2 相对 v0.1 的改动（2026-10-11 排障后重构）：
 11. **插件 reload 会泄漏 spawn 循环**（一晚上 1753 次 spawn、11 个 python 进程）：旧模块实例的 `restartTimer` 不会随 reload 停，各自拉一个 worker；worker 又因为「设备不全」秒退 → 5 秒一轮。两头堵：worker 不退出 + pid 文件单例门闩 + 总线拒连重复 worker
 12. **worker 的中文日志会变乱码**：Python 子进程按 GBK 输出，Node `String(buf)` 按 UTF-8 解 → 文件里全是 `�`，排障时一个字都读不出。spawn 时给 `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8`
 13. **同一条总线不能有两个 worker**：总线原来是「新连接踢掉旧的」，旧 worker 3 秒后重连又把新的踢掉 → 乒乓重连。改成拒收新来的（回 `bye`，worker 收到即退出）
+14. **PortAudio 的 MME/DirectSound 通道会「静默丢音」**（真实通话里「对方完全听不到小鲸鱼」的根因）：播放 `CABLE Input` 原来用 `sounddevice.RawOutputStream(device=7)`，`write()` 不报错、不抛异常、字节数也对，但电缆里**一点波形都没有**。同一段音频换 WASAPI 通道立刻有波形：
+
+    | 播放通道 | 录 CABLE Output 的 rms |
+    |---|---|
+    | sounddevice MME `CABLE Input` | 0.0000 |
+    | sounddevice DirectSound `CABLE Input` | 0.0000 |
+    | sounddevice WASAPI `CABLE Input` | 0.1869 |
+    | soundcard（WASAPI）`CABLE Input` | 0.1568 |
+
+    对策：**播放也统一走 soundcard/WASAPI**，并在 `--check` 里加「播放回路实测」（播 1kHz → 录 CABLE Output，rms<0.01 判 FAIL）。这类故障只有实测能发现——日志层面一切正常（`播放: xxx` 照打）。
+15. **whisper 在中文语境下的幻觉**：铃声/噪声被转成 `噔噔噔噔噔噔`、`MING PAO CANADA MING PAO TORONTO`。对策：转写里一个汉字都没有（`[\u4e00-\u9fff]`）直接丢弃；VAD 绝对门限 80 → **200**（本机实测噪声/铃声峰值 300-700、人声 3000-9000）
+16. **转写慢会丢整句话**：`_asr_busy` 忙时直接丢段（实测漏 3 段）→ 改成 `asyncio.Queue(maxsize=2)` 排队 + `beam_size=1` 贪心 + `condition_on_previous_text=False`（后者既复读又慢一倍）
+17. **QQ 通话里设备选择是「即时生效」的**：通话界面齿轮里选麦克风/扬声器即可，不用退出通话（实测）。麦克风必须选 `CABLE Output`，扬声器必须选插件 `captureDevice` 指定的那个端点，两者不一致就一句都听不到
 
 ---
 

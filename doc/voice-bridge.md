@@ -521,7 +521,9 @@ git -C E:\QQRobot\QQ-agent\plugins push -u origin main
 不是目录 —— 插件加载只扫目录，不会把它当插件。
 
 日常照常在 `plugins/` 里 `git status/add/commit/push` 即可（git 顺着那个文件找对象库）。
-`skills/` 目前仍未纳入版本管理，要的话照同一套再来一遍。
+
+`skills/` **刻意不建仓库**：那里是从技能市场正常安装的第三方技能，不是本仓库的作品，
+重装后按市场列表装回来即可（见 `.gitignore` 里的同名说明）。
 
 ## 附录 C：调研结论（2026-10-10）
 

@@ -36,7 +36,9 @@ const PROFILE_COERCERS = {
   bargeIn: (v) => Boolean(v),                         // 默认 false
   autoAnswer: (v) => Boolean(v),                       // 默认 true（插件给默认值）
   // 群通话降发言欲（默认 false：1v1 里每句都是对你说的，开了会在正常电话里装死）
-  groupCallQuiet: (v) => Boolean(v)
+  groupCallQuiet: (v) => Boolean(v),
+  // 通话结束后把摘要写进文字私聊的记忆（默认 true：只有显式 false 才关）
+  callSummary: (v) => Boolean(v)
 };
 
 /** 归一 profile 补丁：undefined 的键跳过，认识的键按类型收。 */
@@ -73,6 +75,8 @@ export class VoiceBus {
     this.speaking = false;       // TTS 播放中 → 门控生效
     this.capturing = false;      // 是否正在采集（通话中）
     this._autoAnswered = false;  // 本次通话是不是"自动接听"开的（误触发自愈用）
+    this.callStartedAt = 0;      // 这通电话的开始时刻（挂断后做记忆归档用）
+    this.onCallEnd = null;       // 挂断回调：(info) => void，由 app.js 注入
     this.lastActivity = Date.now();
 
     /** 上行转写回调：(text:string) => void，由 app.js 注入 ingestVoiceMessage */
@@ -291,6 +295,7 @@ export class VoiceBus {
   startCapture() {
     if (!this.ready) return false;
     this.capturing = true;
+    this.callStartedAt = Date.now();   // 这通电话的起点（挂断后按它截取转写做记忆归档）
     this.lastActivity = Date.now();
     this.#sendToWorker({ type: 'capture', on: true });
     this.log('[voice] 接听：开始采集');
@@ -306,8 +311,19 @@ export class VoiceBus {
 
   hangup(reason = '手动') {
     const wasCapturing = this.capturing;
+    const startedAt = this.callStartedAt;
+    const target = this.target;
     this.stopCapture();
     if (wasCapturing) this.log(`[voice] 挂断（${reason}）`);
+    // 通话结束 → 交给上层归档记忆（见 src/call-memory.js）。只有真接过（采集过）
+    // 才归档；回调里任何异常都不许影响挂断本身。
+    if (wasCapturing && typeof this.onCallEnd === 'function') {
+      try {
+        this.onCallEnd({ target, startedAt, reason });
+      } catch (e) {
+        this.warn(`[voice] onCallEnd 处理出错: ${e?.message ?? e}`);
+      }
+    }
   }
 
   #checkIdle() {

@@ -682,6 +682,25 @@ export function createApp({ log = console.log } = {}) {
   // （orchestrator 就在上面构造，普通对象直接挂属性；通话开始时它读 voiceProfile）
   voiceBus.onProfile = (p) => { orchestrator.voiceProfile = p; };
   voiceBus.onTranscript = (text, meta) => ingestVoiceMessage(text, meta);
+  // 通话结束 → 把这通电话压成 1-2 条记忆写进**文字私聊**（M2「通话记忆」的
+  // "通话摘要进长期记忆"那层）。写在 private:<QQ号> 而不是 call:* 上，之后文字聊天
+  // 才检索得到。开关走插件设置 callSummary（总线 profile，默认开）。
+  voiceBus.onCallEnd = ({ target, startedAt, reason }) => {
+    if (voiceBus.profile?.callSummary === false) {
+      log('[voice] 通话记忆归档：插件设置里关掉了');
+      return;
+    }
+    const peerId = String(target || '').trim();
+    if (!peerId || peerId === 'test') return;   // 自测会话不写记忆
+    import('./call-memory.js')
+      .then(({ summarizeCall }) => summarizeCall({
+        store, memory, chatKey: `call:private:${peerId}`, target: peerId,
+        peerLabel: String(getConfig().memberNotes?.[peerId] || '').trim(),
+        since: startedAt,
+        log: (m) => log(`[voice] ${m}`)
+      }))
+      .catch((e) => log(`[voice] 通话记忆归档异常（不影响通话）：${e?.message ?? e}`));
+  };
   voiceBus.start();
 
   /**

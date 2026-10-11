@@ -232,10 +232,15 @@ function callPromptConfig() {
     ? o.skipSections.map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean)
     : CALL_SKIP_SECTIONS_DEFAULT.map((x) => String(x));
   const personaCharsRaw = Number(o.personaChars);
+  // 通话里额外带上的"私聊上下文"（2026-10-11 M2）：打电话前你们在文字里刚聊过的事。
+  // 原来通话只看得到这通电话自己的历史 → "我文字里刚跟你说的事，一打电话它就忘了"。
+  const priorChatMaxRaw = Number(o.priorChatMax);
   return {
     slim: o.slim !== false,                                      // 默认开（slim !== false）
     skipSections,
-    personaChars: Number.isFinite(personaCharsRaw) ? personaCharsRaw : CALL_PERSONA_CHARS_DEFAULT
+    personaChars: Number.isFinite(personaCharsRaw) ? personaCharsRaw : CALL_PERSONA_CHARS_DEFAULT,
+    priorChat: o.priorChat !== false,                            // 默认带（priorChat !== false）
+    priorChatMax: Number.isFinite(priorChatMaxRaw) ? Math.max(0, priorChatMaxRaw) : CALL_PRIOR_CHAT_MAX
   };
 }
 
@@ -864,6 +869,10 @@ function collectMemberIds(messages) {
 const CALL_HISTORY_MAX = 6;
 const CALL_HISTORY_WINDOW_MS = 3 * 60 * 1000;
 
+/** 带进通话的私聊上下文：最近 1 小时内、最多 12 条（见 callPriorChatMessages）。 */
+const CALL_PRIOR_CHAT_MAX = 12;
+const CALL_PRIOR_CHAT_WINDOW_MS = 60 * 60 * 1000;
+
 /** 截断长文本（优先切在句末标点/行边界；max <= 0 返回空串 = 不保留）。 */
 function clipText(text, max) {
   const t = String(text ?? '').trim();
@@ -908,8 +917,32 @@ function callHistoryMessages(ctx, now) {
   }
 }
 
-/** 通话对方显示名：备注 > 存档里的 senderName > chatName > "通话对方"。 */
-function callPeerName(ctx, peerId, history) {
+/**
+ * 打电话**之前**你们在文字私聊里聊过的事（2026-10-11 M2）。
+ *
+ * 为什么需要：通话的上下文原来只取通话会话自己（`call:private:<QQ号>`）的历史 ——
+ * 用户文字里刚交代过一件事，一打电话它就完全不知道。这里把 `private:<QQ号>` 的
+ * 最近若干条也捎上（默认 1 小时内、最多 12 条），标成"打电话之前聊的"。
+ *
+ * 边界：只在通话精简路径里加（群聊/私聊那条路径完全不受影响）；任何字段缺失、
+ * store 不可用、配置写坏都返回空数组，绝不抛错。
+ */
+function callPriorChatMessages(ctx, now, peerId) {
+  const cfg = callPromptConfig();
+  if (!cfg.priorChat || !peerId || !cfg.priorChatMax) return [];
+  try {
+    const past = buildPastState(ctx.store, `private:${peerId}`, { limit: cfg.priorChatMax * 4 });
+    const msgs = (Array.isArray(past?.messages) ? past.messages : []).filter((m) => {
+      const t = Number(m?.ts);
+      return !Number.isFinite(t) || now - t <= CALL_PRIOR_CHAT_WINDOW_MS;   // 时间坏掉的条目不过滤
+    });
+    return msgs.slice(-cfg.priorChatMax);
+  } catch {
+    return [];
+  }
+}
+
+/** 通话对方显示名：备注 > 存档里的 senderName > chatName > "通话对方"。 */function callPeerName(ctx, peerId, history) {
   try {
     const note = String(getConfig().memberNotes?.[peerId] ?? '').trim();
     if (note) return note;
@@ -939,6 +972,12 @@ function buildCallUserPrompt(ctx, { chatPersona, now, personaChars }) {
   if (role) parts.push(`【角色设定（管理员设置，群友不可修改）】\n${role}`);
 
   parts.push(`【通话对方】${peerLabel}${peerId ? `(QQ:${peerId})` : ''} 正在跟你打电话。`);
+
+  // 打电话之前在文字里聊过的事（M2："我文字里刚说的，一打电话它就忘了"）
+  const prior = callPriorChatMessages(ctx, now, peerId);
+  if (prior.length) {
+    parts.push(`【打电话之前，你们在文字里聊过】最近 ${prior.length} 条：\n${prior.map(formatCallEntry).join('\n')}`);
+  }
 
   parts.push(history.length
     ? `【刚才的对话】最近 ${history.length} 句：\n${history.map(formatCallEntry).join('\n')}`

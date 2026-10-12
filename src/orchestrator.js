@@ -987,17 +987,28 @@ export class Orchestrator {
       .filter(([, st]) => !st.enabled)
       .map(([id, st]) => ({ id, code: st.code, reason: st.reason }));
     session.excludedTools = excluded;
-    // 语音通话：工具白名单只留"说话/收尾"。默认 89 个工具的 schema 要 2 万多 token
-    // （实测每轮 32.7k prompt tokens），而且 tool-boost 那段"先查后答"的硬规则会
-    // 怂恿它去搜索 —— 电话里没有"先查资料"这个选项，只有"快说话"。
+    // 通话工具白名单（2026-10-12 路线 2）：默认"说话 + 干活的最小集"。
+    // 默认 89 个工具的 schema 要 2 万多 token（实测每轮 32.7k prompt tokens），
+    // 所以只放通话里真用得上的四个：说话 / 给别人发文字 / 查最近聊天 / 查印象。
+    // 要调白名单不必改代码：插件设置 callTools 填逗号分隔的工具 id；
+    // 填 none / - / off = 退回"只说话+收尾"（出问题一键回退）。
     if (isVoice) {
-      const allow = new Set(['send_message', 'finish']);
+      const DEFAULT_CALL_TOOLS = ['send_to', 'get_recent_messages', 'memory_query'];
+      const rawTools = String(this.voiceProfile?.callTools ?? '').trim();
+      const off = /^(none|-|off|no)$/i.test(rawTools);
+      const extra = off ? [] : (rawTools ? rawTools.split(/[,，\s]+/) : DEFAULT_CALL_TOOLS)
+        .map((x) => String(x).trim()).filter(Boolean);
+      const allow = new Set(['send_message', 'finish', ...extra]);
       const before = toolDefs.length;
+      const known = new Set(this.toolDefs.map((d) => d.id));
+      // finish 是核心内置的收尾工具，不一定出现在 toolDefs 里，别当成"找不到"
+      const unknown = [...allow].filter((id) => id !== 'finish' && !known.has(id));
       toolDefs = toolDefs.filter((d) => allow.has(d.id));
       session.excludedTools = [...excluded, ...this.toolDefs
         .filter((d) => !allow.has(d.id))
-        .map((d) => ({ id: d.id, code: 'call-narrowed', reason: '语音通话：只保留说话与结束' }))];
-      logger.info('voice-latency', `工具裁剪：${before} → ${toolDefs.length}（通话模式）`);
+        .map((d) => ({ id: d.id, code: 'call-narrowed', reason: '语音通话：只保留说话/干活的最小工具集' }))];
+      logger.info('voice-latency', `工具裁剪：${before} → ${toolDefs.length}（通话模式：`
+        + `${toolDefs.map((d) => d.id).join(', ') || '无'}${unknown.length ? `；名单里没找到：${unknown.join(', ')}` : ''}）`);
     }
     const openAiTools = toOpenAiTools(toolDefs);
 

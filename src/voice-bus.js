@@ -38,7 +38,12 @@ const PROFILE_COERCERS = {
   // 群通话降发言欲（默认 false：1v1 里每句都是对你说的，开了会在正常电话里装死）
   groupCallQuiet: (v) => Boolean(v),
   // 通话结束后把摘要写进文字私聊的记忆（默认 true：只有显式 false 才关）
-  callSummary: (v) => Boolean(v)
+  callSummary: (v) => Boolean(v),
+  // 通话里放开的额外工具（逗号分隔 id；空 = 用 orchestrator 的默认四个，
+  // 填 none/-/off = 退回"只说话+收尾"）—— 2026-10-12 路线 2
+  callTools: (v) => String(v ?? '').trim(),
+  // 占位话术：距上次转写超过这么多毫秒还没开口，就先说一句垫着（0 = 关）
+  callFillerMs: (v) => (Number.isFinite(Number(v)) ? Number(v) : undefined)
 };
 
 /** 归一 profile 补丁：undefined 的键跳过，认识的键按类型收。 */

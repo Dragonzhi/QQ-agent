@@ -858,7 +858,6 @@ voice-latency round1 llm=…ms toolsSchemaChars=…
 - 首字延迟验收线：**p50 ≤ 2.0s、p90 ≤ 3.0s**；碎片轮次归零。打一通电话即可核对。
 
 ### 九、怎么核对（照抄）
-
 ```powershell
 # 1) 通话结束后看这一轮的 token 结构与 LLM 耗时（不用重启就有）
 $f = Get-ChildItem E:\QQRobot\QQ-agent\data\sessions -File |
@@ -872,6 +871,51 @@ Get-Content (Get-ChildItem E:\QQRobot\QQ-agent\data\logs\*.log |
 Get-Content E:\QQRobot\QQ-agent\data\voice-bridge-debug.log -Tail 60 |
   Select-String '转写\(|丢弃|碎句|VAD'
 ```
+
+---
+
+## 二十二、"什么时候能打电话" —— 冷启动就绪播报（2026-10-12）
+
+> 用户原话："每次冷启动打开的时候，总是要等一会等它通话部分初始化，这很正常，
+> 但是我不知道它什么时候加载好了。"
+
+**判据**（三件事齐了才算可用，任何一件没齐打电话都会退化）：
+
+| # | 部分 | 怎么算就绪 |
+|---|---|---|
+| ① | 音色服务 | `GET /health` 返回 `ok:true`（`ttsEngine=edge` 时直接算就绪） |
+| ② | 语音 worker | worker 自己打出「已连接」（连上 VoiceBus） |
+| ③ | 语音识别 | worker 打出「ASR sidecar 就绪」（或 whisper 兜底的「模型就绪」） |
+
+三件齐了 → ① 控制台一行大字日志 ② **Windows 通知**（借 Electron 的 `Notification`）
+③ 落盘 `data/voice-bridge-ready.json`（脚本与模型都能问）。
+
+**实测两次冷启动**（14:38 / 14:40，同一台机器、灯 V2.5 + 中文基础 GPT）：
+
+| 部分 | 第 1 次 | 第 2 次 |
+|---|---|---|
+| 语音 worker | 0.6s | 0.5s |
+| 语音识别（SenseVoice cuda:0） | 19.4s | 24.3s |
+| 音色服务（GSV 加载 + 预热 8 种句长） | 31.7s | 34.5s |
+| **可以打电话** | **31.7s** | **34.5s** |
+
+→ 长杆是**音色服务**（模型加载 22s + 预热 ~8s）；识别与它并行跑；worker 秒连。
+想再快就得动音色服务的加载（懒加载/换更小的模型），本轮不做。
+
+**随时问**：
+
+```powershell
+pwsh -File E:\QQRobot\tools\voice_ready.ps1          # 一眼看现在能不能打
+pwsh -File E:\QQRobot\tools\voice_ready.ps1 -Watch   # 每 2 秒刷，就绪自动退出
+```
+
+聊天里问它「声桥状态」也行 —— 工具 `voice-bridge__status` 多了一行
+`就绪: ✅ 可以打电话了（冷启动 34.5s：音色服务 34.5s · 语音 worker 0.5s · 语音识别 24.3s）`。
+
+⚠️ 实现上两个容易踩的点（已处理）：
+1. 技能管理器**每几秒就 reload 一次**插件，`boot()` 会被反复调用 —— 就绪计时**只在没有
+   进行中计时时重置**，否则永远播报不出来（第一次就是这么差点写错的）。
+2. `/health` 轮询要**用全局标志去重**（`G.ttsWatch`），否则每次 reload 都多一个轮询器。
 
 ---
 

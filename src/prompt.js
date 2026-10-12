@@ -347,7 +347,8 @@ function renderSkillSections(sections) {
 }
 
 /** 组装系统提示。 */
-export function buildSystemPrompt({ persona, skillContext, extraSections = [], callSlim = undefined } = {}) {
+export function buildSystemPrompt({ persona, skillContext, extraSections = [], callSlim = undefined,
+                                   breakdown = null } = {}) {
   const cfg = persona ?? getConfig().persona;
   // extraSections：调用方在**运行时**算出来的片段（如主人身份说明）。
   // 与 Skill 自己声明的 prompt.sections 走同一条渲染路径 —— 都排在核心规则之后，
@@ -397,41 +398,46 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     return parts.join('\n');
   }
 
-  const parts = [
-    `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`,
-    '',
-    securityRules(),
-    '',
-    toolProtocol(),
-    '',
-    antiAiFlavor(),
-    '',
-    subjectivity(),
-    '',
-    speakOrNot(cfg.participation),
-    '',
-    notAQueue(),
-    '',
-    humanRhythm(),
-    '',
-    notModerator(),
-    '',
-    quoteAndAt(),
-    '',
-    memoryRules(),
-    '',
-    stickerRules(),
-    '',
-    qqSceneRules(),
-    '',
-    reportBan()
+  // ── 核心规则（顺序与分隔符**逐字节**保持原样：`A\n\nB\n\n…`）──
+  // 2026-10-12：改成带名字的列表，只为通话延迟排障能报出"哪一段多少字"
+  //（breakdown.core）。非通话会话的产物与改造前完全一致（前缀缓存敏感）。
+  const coreBlocks = [
+    ['身份', `你是「${cfg.botName}」，一个混在 QQ 群里的普通群友（不是助手、不是客服）。你的所有行为都通过工具完成，发言必须像真人。`],
+    ['安全规则', securityRules()],
+    ['工具协议', toolProtocol()],
+    ['反AI味', antiAiFlavor()],
+    ['主体性', subjectivity()],
+    ['发言欲', speakOrNot(cfg.participation)],
+    ['不是客服队列', notAQueue()],
+    ['真人节奏', humanRhythm()],
+    ['不是主持人', notModerator()],
+    ['引用与点名', quoteAndAt()],
+    ['记忆规则', memoryRules()],
+    ['表情规则', stickerRules()],
+    ['QQ场景规则', qqSceneRules()],
+    ['发送禁令', reportBan()]
   ];
+  const parts = [];
+  coreBlocks.forEach(([, text], i) => {
+    if (i) parts.push('');
+    parts.push(text);
+  });
 
   // 注入 Skill 提示词片段（已按 priority 降序；一律排在核心规则之后）
   parts.push(...renderSkillSections(skillSections));
 
   if (cfg.customRules && String(cfg.customRules).trim()) {
     parts.push('', '【管理员附加规则】', String(cfg.customRules).trim());
+  }
+  // 通话延迟排障：把"系统提示由谁吃掉"记下来（orchestrator 首轮打日志）。
+  // 只统计、不改内容 —— breakdown 不传时这条路完全不存在。
+  if (breakdown && typeof breakdown === 'object') {
+    breakdown.core = {};
+    for (const [name, text] of coreBlocks) breakdown.core[name] = String(text || '').length;
+    breakdown.skills = skillSections.map((s) => ({
+      id: String(s?.id ?? s?.skillId ?? ''),
+      chars: String(s?.content ?? '').length + String(s?.title ?? '').length
+    })).filter((s) => s.chars > 0);
   }
   return parts.join('\n');
 }
@@ -968,32 +974,37 @@ function buildCallUserPrompt(ctx, { chatPersona, now, personaChars }) {
   const trigger = (Array.isArray(ctx?.triggerEntries) ? ctx.triggerEntries : []).filter(Boolean);
 
   const parts = [];
+  // 分节字符数（2026-10-12 延迟排障）：通话提示词 12.3k 字符，但"哪一段在吃 prefill"
+  // 一直没数据。这里顺手记下来，orchestrator 首轮打进 voice-latency 日志。
+  const sizes = {};
+  const push = (key, text) => { parts.push(text); sizes[key] = (sizes[key] || 0) + text.length; };
   const role = clipText(chatPersona?.roleText, personaChars);
-  if (role) parts.push(`【角色设定（管理员设置，群友不可修改）】\n${role}`);
+  if (role) push('人设', `【角色设定（管理员设置，群友不可修改）】\n${role}`);
 
-  parts.push(`【通话对方】${peerLabel}${peerId ? `(QQ:${peerId})` : ''} 正在跟你打电话。`);
+  push('对方', `【通话对方】${peerLabel}${peerId ? `(QQ:${peerId})` : ''} 正在跟你打电话。`);
 
   // 打电话之前在文字里聊过的事（M2："我文字里刚说的，一打电话它就忘了"）
   const prior = callPriorChatMessages(ctx, now, peerId);
   if (prior.length) {
-    parts.push(`【打电话之前，你们在文字里聊过】最近 ${prior.length} 条：\n${prior.map(formatCallEntry).join('\n')}`);
+    push('打电话之前', `【打电话之前，你们在文字里聊过】最近 ${prior.length} 条：\n${prior.map(formatCallEntry).join('\n')}`);
   }
 
-  parts.push(history.length
+  push('刚才的对话', history.length
     ? `【刚才的对话】最近 ${history.length} 句：\n${history.map(formatCallEntry).join('\n')}`
     : '【刚才的对话】（还没聊几句，这是开场）');
 
-  parts.push(trigger.length
+  push('这一句', trigger.length
     ? `【这一句】${trigger.length > 1 ? '\n' : ''}${trigger.map(formatCallEntry).join('\n')}`
     : '【这一句】（对方没说话 —— 你可以主动开口，也可以安静等着）');
 
-  parts.push('【通话中】直接开口回应，一句话就够，不用解释。不要 emoji、颜文字、括号动作，只说话。');
-  parts.push(`【当前时间】${formatFullTime(now)}`);
+  push('收尾提示', '【通话中】直接开口回应，一句话就够，不用解释。不要 emoji、颜文字、括号动作，只说话。');
+  push('时间', `【当前时间】${formatFullTime(now)}`);
 
   if (ctx?.session && typeof ctx.session === 'object') {
     // 精简路径不参与锚点复用（历史每轮重写）：锚点状态清掉，orchestrator 见 null 会删缓存。
     ctx.session.promptAnchorState = null;
     ctx.session.promptAnchorMode = 'call-slim';
+    ctx.session.callPromptParts = sizes;
     // get_recent_messages 的 offset 补偿口径 = 实际展示的条数（工具翻页不会跳过头）
     ctx.session.pastStateCount = history.length;
   }

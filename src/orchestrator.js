@@ -883,6 +883,9 @@ export class Orchestrator {
     //   3. 全局人设（cfg.persona）
     // 名字（botName/selfNickname）在任何层都保持全局值 —— 那是账号身份，
     // 换了会和 @ 判定对不上（personaForChat 在结构上就不允许覆盖这两个字段）。
+    // 通话延迟排障（2026-10-12）：系统提示里"谁在吃 prefill"要有数据才敢砍。
+    // 只在通话会话收集（普通会话零成本：不传 breakdown，prompt.js 里那段不执行）。
+    const promptBreakdown = isVoice ? {} : null;
     const systemPrompt = buildSystemPrompt({
       skillContext,
       persona: ownerPersona || personaForChat(chatKey),
@@ -890,6 +893,7 @@ export class Orchestrator {
       // 跟通话无关的技能段（表情包/空间日记/禁漫/明日方舟…），它们既拖慢 prefill
       // 又跟"秒回"打架。传 undefined 让 prompt.js 走它自己的默认值。
       callSlim: isVoice ? this.voiceProfile?.slimPrompt !== false : undefined,
+      breakdown: promptBreakdown,
       extraSections: ownerRules
         ? [{ id: 'owner-rules-run', title: '', priority: 72, content: ownerRules }]
         : []
@@ -917,6 +921,13 @@ export class Orchestrator {
     session.systemPrompt = systemPrompt;
     session.userPrompt = userPrompt;
     session.promptChars = systemPrompt.length + userPrompt.length;
+    // 通话延迟排障（2026-10-12）：提示词总量一直有日志，但"大头在哪一段"没有 ——
+    // 分节字符数由 prompt.js 的 buildCallUserPrompt 写进 session.callPromptParts
+    // （人设/打电话之前/刚才的对话/这一句…），下面首轮日志里打出来。
+    session.promptSysChars = systemPrompt.length;
+    session.promptUserChars = userPrompt.length;
+    session.promptParts = session.callPromptParts || null;
+    session.promptBreakdown = promptBreakdown;
     session.model = cfg.api.model;
     // 记录本次调用走的是哪个渠道（A6API / openrouter / 本地中转…）。
     // 同名模型在不同渠道是不同商品，用量与价格要分开统计。
@@ -1119,9 +1130,29 @@ export class Orchestrator {
         signal: abortSignal
       });
       if (isVoice) {
+        const toolChars = (() => {
+          try { return JSON.stringify(openAiTools || []).length; } catch { return 0; }
+        })();
         logger.info('voice-latency', `round${round + 1} llm=${Date.now() - llmT0}ms `
           + `model=${response.model || ''} tools=${(response.message?.tool_calls || []).length} `
-          + `promptChars=${session.promptChars || 0}`);
+          + `promptChars=${session.promptChars || 0} toolsSchemaChars=${toolChars}`);
+        // 首轮打一次分节明细：排查"提示词哪一段在吃 prefill"（改短哪一段有收益）
+        if (round === 0) {
+          const parts = session.promptParts
+            ? Object.entries(session.promptParts).map(([k, v]) => `${k}=${v}`).join(' ')
+            : '';
+          logger.info('voice-latency', `prompt 分节：sys=${session.promptSysChars || 0} `
+            + `user=${session.promptUserChars || 0}${parts ? ' | ' + parts : ''}`);
+          const bd = session.promptBreakdown;
+          if (bd) {
+            const core = Object.entries(bd.core || {}).sort((a, b) => b[1] - a[1])
+              .map(([k, v]) => `${k}=${v}`).join(' ');
+            const skills = (bd.skills || []).sort((a, b) => b.chars - a.chars)
+              .map((s) => `${s.id || '?'}=${s.chars}`).join(' ');
+            logger.info('voice-latency', `系统提示分节：核心 ${core}`);
+            logger.info('voice-latency', `系统提示分节：技能段 ${skills || '（无）'}`);
+          }
+        }
       }
       session.model = response.model || session.model;
       // 渠道与模型必须同源：fallback 可以配另一个 provider，只更新 model 会把

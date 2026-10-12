@@ -452,8 +452,14 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     ['发送禁令', reportBan()]
   ];
   const parts = [];
-  coreBlocks.forEach(([, text], i) => {
-    if (i) parts.push('');
+  // 通话精简：核心规则里也有"电话里根本做不到"的段 —— 通话工具表里没有表情工具、
+  // 也没有引用/@ 工具（语音里也没法引用），这两段纯吃 prefill。
+  // 实测（2026-10-12 分节埋点）：表情规则 483 + 引用与点名 272 ≈ 755 字符，
+  // 占通话提示词的 10%。非通话会话 slimOn=false，逐字节不变。
+  const CORE_SKIP_FOR_CALL = new Set(['表情规则', '引用与点名']);
+  coreBlocks.forEach(([name, text]) => {
+    if (slimOn && CORE_SKIP_FOR_CALL.has(name)) return;   // 连分隔空行一起省
+    if (parts.length) parts.push('');
     parts.push(text);
   });
 

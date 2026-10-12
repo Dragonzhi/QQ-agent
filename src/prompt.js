@@ -205,7 +205,31 @@ export const CALL_SKIP_SECTIONS_DEFAULT = [
   'trendy-memes',      // 网络流行梗
   'jm-suomingor',      // 禁漫漫画下载（静态段 + 动态规则段）
   'arknights-master',  // 明日方舟大师（动态段，闸门放行时才有）
-  'share-card'         // 分享链接与卡片解读
+  'share-card',        // 分享链接与卡片解读
+  // ── 2026-10-12 按通话会话实测补的段（原来靠 skillId 没兜住，白吃 6k+ 字符）──
+  // 依据：data/sessions/<通话会话>.json 里 systemPrompt 的分节字符数（一段一段量出来的）+
+  //      通话工具白名单只有 send_message/finish —— 这些段教的工具在电话里根本不存在。
+  // 注意：**id 要用 manifest 里各段自己的 id**（skillId 兜不住，实测漏过）。
+  'verify-first-rule',        // 【不知道之前，先查证】1210 字：先搜再答，通话里没有搜索工具
+  'verify-first',
+  'meme-story-discipline',    // 【梗故事·定向回应】1166 字：联网查梗/收录梗，同上
+  'meme-story',
+  'sticker-librarian-guide',  // 【表情库管理】2376 字：整理收藏表情，通话里没有表情工具
+  'sticker-librarian',
+  'sticker-memory-note',      // 表情记忆：同上
+  'sticker-memory',
+  'memory-keeper-rules',      // 会话记忆规则：通话里没有 memory_* 工具
+  'session-memory-keeper',
+  'reply-meme-guide',         // 表情包/梗回复：要工具
+  'reply-meme',
+  'pixiv-image-tagsearch-note',
+  'pixiv-image-tagsearch',
+  'image-drop-note',
+  'image-drop',
+  'bili-video-tool-note',
+  'bili-share',
+  'hot-trend-tracker-note',
+  'hot-trend-tracker'
 ];
 
 /** 通话会话的 chatKey 前缀。 */

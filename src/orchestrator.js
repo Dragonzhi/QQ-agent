@@ -1009,6 +1009,18 @@ export class Orchestrator {
         .map((d) => ({ id: d.id, code: 'call-narrowed', reason: '语音通话：只保留说话/干活的最小工具集' }))];
       logger.info('voice-latency', `工具裁剪：${before} → ${toolDefs.length}（通话模式：`
         + `${toolDefs.map((d) => d.id).join(', ') || '无'}${unknown.length ? `；名单里没找到：${unknown.join(', ')}` : ''}）`);
+      // 通话里两个"发消息"的工具名太像，模型会拿 send_message 当"发文字"用
+      //（2026-10-12 真机实测：让它私聊发消息，它调了 send_message，结果只是出声）。
+      // 通话模式下一律改写成"出声 vs 发文字"的说法，别让名字误导它。
+      const CALL_DESC = {
+        send_message: '【通话中】说话：你直接出声，对方用耳朵听到。'
+          + '这不是发文字消息，也不会在 QQ 里留下文字。',
+        send_to: '【通话中】给对方或群里发**文字**消息：对方在 QQ 里看到文字，不会出声。'
+          + '调用前必须先复述内容并等对方确认，一次通话最多 3 条。'
+      };
+      toolDefs = toolDefs.map((d) => (CALL_DESC[d.id]
+        ? { ...d, description: `${CALL_DESC[d.id]}（原说明：${d.description || ''}）` }
+        : d));
     }
     const openAiTools = toOpenAiTools(toolDefs);
 

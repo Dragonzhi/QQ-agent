@@ -819,11 +819,59 @@ voice-latency round1 llm=…ms toolsSchemaChars=…
 **逐字节等价**重排并回归（`tools/test_call_memory.mjs` 19 项 + 独立导入对拍 4662 字符），
 前缀缓存不受影响。
 
-### 七、待办（本轮没做完的部分）
+### 七、按实测砍掉了 6.4k 字符（**已生效，不用重启**）
 
-- 拿到分节数据后按实测砍提示词（预期最大头是"通话里还用不到的核心规则段"，
-  工具白名单只剩 `send_message/finish`，表情/记忆/引用类规则在电话里用不上）。
-- 首字延迟的验收线：**p50 ≤ 2.0s、p90 ≤ 3.0s**；碎片轮次归零。
+`data/sessions/<通话会话>.json` 里存着每轮的 `systemPrompt` / `userPrompt` 全文 ——
+不用重启就能逐段量。13:33 那通电话的真实构成：
+
+```
+系统提示 11,044 字符                             用户提示 1,315 字符
+  2,376 【表情库管理】        ← 通话里没有表情工具     919 人设（截断）
+  1,210 【不知道之前，先查证】 ← 没有搜索工具           136 打电话之前（M2）
+  1,166 【梗故事·定向回应】   ← 没有搜索/收录工具       121 刚才的对话
+  1,048 【可用技能】                                   27 这一句
+    881 【主人】×2（内容完全一样，疑似重复注入）        47 通话中
+    699 【工作方式】…其余核心规则                    29 当前时间
+```
+
+**跳过名单原来只写了 skillId，兜不住这些段**（段的 id 是 `sticker-librarian-guide`
+这种，不是技能 id）→ 补进 `CALL_SKIP_SECTIONS_DEFAULT`，同时写进
+`data/config.json` 的 `callPrompt.skipSections`（配置优先、**热生效**，不用重启）：
+
+- `sticker-librarian-guide`（2376）、`verify-first-rule`（1210）、`meme-story-discipline`（1166）
+- `sticker-memory-note`、`memory-keeper-rules`、`reply-meme-guide`、pixiv/image-drop/bili/hot-trend 等小段
+
+判据很硬：**通话工具白名单只有 `send_message` + `finish`**，这些段教的工具在电话里
+根本不存在。离线校验（`E:\Temp\check_call_skip.mjs`）：通话只剩
+`owner-identity-basic` + `voice-bridge-note`；私聊 15 段一段不少。
+预期下一通电话 `promptChars` 从 ~12.4k 掉到 ~6k（prefill 差不多腰斩）。
+
+### 八、还没做的
+
+- **核心规则里也有通话用不上的**（`表情包策略`370 / `引用与点名`274 / `轻量记忆`200，
+  同样是没有对应工具）—— 要动 `buildSystemPrompt` 的核心段，属于 `src/**`，
+  跟下一条一起做一次重启。
+- `session-memory-keeper` 的 5 个 hook 在通话会话里每次都抛
+  `需要真实当前私聊或群聊标识`（今天 102 条日志）。它不影响正确性，纯粹是噪声 +
+  每轮几次异常；那个插件是市场安装的（有 CHECKSUMS），改 `index.js` 可能被更新覆盖，
+  暂时留着。
+- 首字延迟验收线：**p50 ≤ 2.0s、p90 ≤ 3.0s**；碎片轮次归零。打一通电话即可核对。
+
+### 九、怎么核对（照抄）
+
+```powershell
+# 1) 通话结束后看这一轮的 token 结构与 LLM 耗时（不用重启就有）
+$f = Get-ChildItem E:\QQRobot\QQ-agent\data\sessions -File |
+     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$j = Get-Content $f.FullName -Raw | ConvertFrom-Json
+"$($j.chatKey)  sys=$($j.systemPrompt.Length) user=$($j.userPrompt.Length)"
+
+# 2) 首字延迟 / 碎片 / 语气词（worker 与核心两份日志）
+Get-Content (Get-ChildItem E:\QQRobot\QQ-agent\data\logs\*.log |
+  Sort-Object LastWriteTime -Descending)[0] | Select-String '首字延迟|round1 llm='
+Get-Content E:\QQRobot\QQ-agent\data\voice-bridge-debug.log -Tail 60 |
+  Select-String '转写\(|丢弃|碎句|VAD'
+```
 
 ---
 

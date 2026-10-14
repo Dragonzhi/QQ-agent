@@ -25,6 +25,45 @@ function loadCardTextMod() {
 }
 
 /**
+ * XML 卡片段（QQ 老式 xml 卡片 / viewMultiMsg 聊天记录）→ 可读文本。
+ * 两类常见内容：
+ *   ① 合并转发预览（serviceID=35）：<title> 里自带前几条内容预览。
+ *      实测：这类 XML **没有 m_resid**，协议端拿不到全文，预览就是全部信息——
+ *      渲染出来远比吐一个 [xml] 强（模型至少知道转发的到底是什么）；
+ *   ② 普通 xml 分享卡片（<title>/<summary>/<jump url>）：渲染标题+链接，
+ *      输出格式与 json 卡片一致（[卡片消息｜…]），share-card 能直接吃到。
+ * 取不到任何有用信息就退回 [xml]，不制造噪音。
+ */
+function xmlCardToText(d) {
+  const xml = typeof d === 'string' ? d : String(d?.data ?? '');
+  if (!xml || xml.length > 65536) return '[xml]';
+  const clean = (s) => String(s).replace(/<!\[CDATA\[|\]\]>/g, '').replace(/<[^>]*>/g, '').trim();
+  const allTags = (name) => [...xml.matchAll(new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)</${name}>`, 'gi'))]
+    .map((m) => clean(m[1])).filter(Boolean);
+  const firstTag = (name) => allTags(name)[0] || '';
+
+  // ① 合并转发预览
+  if (/serviceID="35"|viewMultiMsg/.test(xml)) {
+    const titles = allTags('title');
+    if (titles.length) {
+      const preview = titles.slice(1, 6).join(' / ');
+      return `[合并转发预览｜${titles[0]}${preview ? `：${preview}` : ''}]`;
+    }
+    return '[合并转发（无法读取）]';
+  }
+
+  // ② 普通 xml 分享卡片
+  const title = firstTag('title') || firstTag('brief');
+  const summary = firstTag('summary') || firstTag('desc');
+  const urls = [...xml.matchAll(/https?:\/\/[^\s"'<>)\]]+/g)].map((m) => m[0])
+    .filter((u) => !/qpic\.cn|gtimg\.cn|qlogo\.cn|idqqimg\.com/i.test(u));
+  const url = urls[0] || '';
+  if (!title && !url) return '[xml]';
+  const head = [title, summary && summary !== title ? summary : ''].filter(Boolean).join('：');
+  return `[卡片消息${head ? `｜${head}` : ''}${url ? ` ${url}` : ''}]`;
+}
+
+/**
  * 正文 @ 规范化：把 `@昵称` 补成 `@昵称(QQ:xxx)`。
  * 走 `message.inline-at-normalize` 能力；没有提供者（Skill 未启用）时返回 null，
  * 调用方退回原文本 —— 保证"关掉 Skill 就不再有该效果"。
@@ -508,6 +547,7 @@ export async function segmentsToText(segments, { resolveReply = null, resolveAtN
         out.push('[合并转发聊天记录]');
         break;
       }
+      case 'xml': out.push(xmlCardToText(d)); break;
       default: out.push(`[${seg?.type ?? '未知'}]`); break;
     }
   }
@@ -541,14 +581,19 @@ export function extractMediaFromSegments(segments) {
  *
  * 规则：
  *   - 每个节点一行「昵称: 内容」，内容复用 segmentsToText（@/图片/表情等占位一致）
- *   - 嵌套转发不再展开（深度 1 封顶，套娃截断）
+ *   - 嵌套转发展开到第二层（depth<1 且有 fetchForward 时再拉一次；否则留占位，
+ *     防套娃爆炸；实测大量嵌套转发的 XML 没有 m_resid，只能读到预览——见 xmlCardToText）
  *   - 封顶：maxNodes 条 / maxChars 字符，超出注明"还有 N 条未展开"
  *   - 节点里的图片段同时提取到 media（url 新鲜，可用于取图/金句）
  *
  * @param {Array} nodes get_forward_msg 返回的 messages 数组
+ * @param {Object} [opts]
+ * @param {Function} [opts.fetchForward] async (resId) => nodes —— 拉嵌套转发用；
+ *        不传则嵌套转发保持占位。调用方（app.js 入库 / read_forward 工具）传入。
+ * @param {number} [opts.depth] 当前深度（内部递归用，外部别传）
  * @returns {{ text: string, media: Array } | null} 无可用节点返回 null
  */
-export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000 } = {}) {
+export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000, fetchForward = null, depth = 0 } = {}) {
   if (!Array.isArray(nodes) || !nodes.length) return null;
   const lines = [];
   const media = [];
@@ -563,18 +608,35 @@ export async function expandForwardNodes(nodes, { maxNodes = 30, maxChars = 3000
     const name = nid && nid !== rawName ? `${rawName}(QQ:${nid})` : rawName;
     const nm = n.message ?? n.content;
     let body = '';
+    let nestedText = '';
     if (typeof nm === 'string') {
       // 字符串形态一般是 CQ 码原文，剥掉 [CQ:xxx] 段保留纯文本
       body = nm.replace(/\[CQ:[^\]]*\]/g, '').trim();
     } else if (Array.isArray(nm)) {
-      // 嵌套 forward 段清空 data → segmentsToText 输出 [转发消息] 占位（深度 1 封顶）
-      const segs = nm.map((s) => (s?.type === 'forward' ? { type: 'forward', data: {} } : s));
+      // 嵌套 forward 段：有 res_id 且没超深度 → 拉第二层，缩进接在后面
+      const segs = [];
+      const nested = [];
+      for (const s of nm) {
+        if (s?.type === 'forward' && depth < 1 && fetchForward) {
+          const rid = s?.data?.id ?? s?.data?.res_id ?? s?.data?.forward_id;
+          if (rid) { nested.push(String(rid)); continue; }
+        }
+        segs.push(s);
+      }
       body = await segmentsToText(segs, {});
       media.push(...extractMediaFromSegments(segs));
+      for (const rid of nested) {
+        try {
+          const sub = await fetchForward(rid);
+          const ex = await expandForwardNodes(Array.isArray(sub) ? sub : [],
+            { maxNodes: 10, maxChars: 600, fetchForward, depth: depth + 1 });
+          if (ex?.text) nestedText += `\n　└ 嵌套转发：${ex.text.replace(/\n/g, '\n　')}`;
+        } catch { /* 嵌套拉不到（无 res_id/服务端丢弃）不影响主线 */ }
+      }
     }
     body = body.replace(/\s+/g, ' ').trim().slice(0, 200);
-    if (!body) continue;
-    lines.push(`${name}: ${body}`);
+    if (!body && !nestedText) continue;
+    lines.push(`${name}: ${body}${nestedText}`);
     if (lines.join('\n').length > maxChars) { truncated = nodes.length - i - 1; break; }
   }
 

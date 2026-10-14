@@ -975,7 +975,12 @@ export function createApp({ log = console.log } = {}) {
       try {
         const r = await onebot.call('get_forward_msg', forwardResId ? { id: forwardResId } : { message_id: Number(event.message_id) });
         const nodes = Array.isArray(r?.messages) ? r.messages : (Array.isArray(r?.data?.messages) ? r.data.messages : []);
-        const ex = await expandForwardNodes(nodes);
+        // fetchForward：嵌套转发（第二层）按 res_id 再拉一次；拉不到就留预览/占位
+        const fetchForward = async (rid) => {
+          const sub = await onebot.call('get_forward_msg', { id: String(rid) });
+          return Array.isArray(sub?.messages) ? sub.messages : (Array.isArray(sub?.data?.messages) ? sub.data.messages : []);
+        };
+        const ex = await expandForwardNodes(nodes, { fetchForward });
         if (ex && ex.text) {
           text = ex.text;
           if (ex.media?.length) media.push(...ex.media);

@@ -513,8 +513,11 @@ function registerAllTools() {
       try {
         const entry = ctx.store.findByMid(ctx.chatKey, args.messageId);
         if (!entry) return err(`当前会话找不到消息 ${args.messageId}。${midHint(ctx)}`);
-        // 存档里已是展开文本（收消息时已展开/之前展开过）→ 直接给，不再请求 QQ
-        if (String(entry.text || '').startsWith('[合并转发 共')) {
+        // 存档里已是展开文本（收消息时已展开/之前展开过）→ 直接给，不再请求 QQ。
+        // 例外：缓存文本里还有 [xml] / [合并转发聊天记录] 未解析占位的（2026-10-14 前的
+        // 旧存档），说明是上一版渲染的产物 —— 重新展开一次，顺手把存档升级成新版。
+        if (String(entry.text || '').startsWith('[合并转发 共')
+            && !/\[xml\]|\[合并转发聊天记录\]/.test(String(entry.text || ''))) {
           return ok({ messageId: entry.mid, text: entry.text, note: '该转发已展开（读的是存档）' });
         }
         // get_forward_msg 的参数优先级（2026-10-10 实测 SnowLuma）：
@@ -534,7 +537,12 @@ function registerAllTools() {
         }
         const r = await ctx.onebot.call('get_forward_msg', resId ? { id: resId } : { message_id: Number(entry.mid) });
         const nodes = Array.isArray(r?.messages) ? r.messages : [];
-        const ex = await expandForwardNodes(nodes);
+        // fetchForward：嵌套转发（第二层）按 res_id 再拉一次；拉不到就留预览/占位
+        const fetchForward = async (rid) => {
+          const sub = await ctx.onebot.call('get_forward_msg', { id: String(rid) });
+          return Array.isArray(sub?.messages) ? sub.messages : [];
+        };
+        const ex = await expandForwardNodes(nodes, { fetchForward });
         if (!ex || !ex.text) return err('转发内容为空或已被 QQ 服务端丢弃（发送时间太久）');
         // 写回存档：一次展开，永久升级这条记录（模型/存档页/金句墙都受益）
         ctx.store.updateByMid(ctx.chatKey, entry.mid, { text: ex.text, appendMedia: ex.media || [] });

@@ -30,6 +30,132 @@ function flushSettingsSaves() {
   }
 }
 
+// ── 回复示例库面板（doc/persona-meme-plan.md P1）────────────────────
+// 示例数据不经过 /api/config 的表单保存链，走专用端点；state.personaExamples
+// 只是渲染缓存。渲染与事件都收在这里（面板每次刷新整体重建，逐行重绑）。
+const EXAMPLE_SOURCE_LABEL = { capture: '收藏', manual: '手动', review: '复盘' };
+
+async function loadPersonaExamplesPanel() {
+  const box = $('#persona-examples-panel');
+  if (!box) return;
+  try {
+    const r = await api('/api/persona/examples');
+    state.personaExamples = Array.isArray(r.examples) ? r.examples : [];
+    state.personaExamplesMaxActive = Number(r.maxActive) || 30;
+    renderPersonaExamplesPanel();
+  } catch (e) {
+    box.innerHTML = `<div class="hint">示例库加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderPersonaExamplesPanel() {
+  const box = $('#persona-examples-panel');
+  if (!box) return;
+  const list = state.personaExamples || [];
+  const maxActive = state.personaExamplesMaxActive || 30;
+  const active = list.filter((e) => e.status === 'active');
+  const pending = list.filter((e) => e.status === 'pending');
+  // rejected 不展示，只留一个数量：让用户知道撤回/淘汰的东西没有丢
+  const rejectedN = list.length - active.length - pending.length;
+
+  const row = (e, isActive) => `
+    <div class="pe-row" data-id="${esc(e.id)}">
+      <span class="pe-source" title="来源：${esc(e.source || '未知')}">${esc(EXAMPLE_SOURCE_LABEL[e.source] || e.source || '未知')}</span>
+      <span class="pe-trigger" title="${esc(e.trigger)}">${esc(e.trigger)}</span>
+      <span class="pe-good" title="${esc((e.good || []).join('\n'))}">${esc((e.good || [])[0] || '')}</span>
+      <span class="pe-actions">
+        ${isActive
+          ? `<button type="button" class="btn btn-small pe-status" data-status="pending" title="撤回：置回待审，提示词不再注入">撤回</button>`
+          : `<button type="button" class="btn btn-small btn-primary pe-status" data-status="active" title="晋升：注入提示词（会查重，受上限约束）">晋升</button>`}
+        <button type="button" class="btn btn-small pe-edit">编辑</button>
+        <button type="button" class="btn btn-small btn-danger pe-del">删除</button>
+      </span>
+    </div>`;
+
+  const group = (title, rows, isActive) => `
+    <div class="pe-group">
+      <div class="pe-group-head">${title}<span class="muted">（${rows.length} 条）</span></div>
+      ${rows.map((e) => row(e, isActive)).join('') || '<div class="hint">（空）</div>'}
+    </div>`;
+
+  box.innerHTML = `
+    <h3 style="margin-bottom:4px">回复示例库</h3>
+    <div class="hint" style="margin-bottom:10px">生效 ${active.length}/${maxActive} · 待审 ${pending.length} 条 · 已驳回/淘汰 ${rejectedN} 条（不展示）。生效中的示例会渲染进提示词的【回复示例】段；存档页 hover 机器人发言可一键收藏。</div>
+    <div class="field pe-add-form">
+      <label>手动添加（保存为待审）</label>
+      <input type="text" id="pe-add-trigger" placeholder="触发句：群友会说什么（不带昵称）" />
+      <textarea id="pe-add-good" style="min-height:52px" placeholder="好回复（每行一条）"></textarea>
+      <textarea id="pe-add-bad" style="min-height:36px" placeholder="坏回复（可选，每行一条）"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <button type="button" class="btn btn-small btn-primary" id="pe-add-btn">添加</button>
+        <span class="hint" id="pe-add-hint" style="margin:0"></span>
+      </div>
+    </div>
+    ${group('生效中', active, true)}
+    ${group('待审', pending, false)}`;
+
+  // 面板输入不进设置表单的自动保存链：这些字段落的是示例专用端点，
+  // 冒泡到 #settings-form 只会触发一次无意义的全量 config 保存（还会挂黄条）。
+  // box 是本次 renderSettings 重建出来的新节点，守卫绑一次即可。
+  if (!box.__peGuardBound) {
+    box.__peGuardBound = true;
+    box.addEventListener('input', (e) => e.stopPropagation());
+    box.addEventListener('change', (e) => e.stopPropagation());
+  }
+
+  // 手动添加：成功后重拉面板（表单随重渲染清空），提示补绘在新的 hint 上
+  $('#pe-add-btn')?.addEventListener('click', async () => {
+    const body = {
+      trigger: ($('#pe-add-trigger')?.value || '').trim(),
+      good: ($('#pe-add-good')?.value || ''),
+      bad: ($('#pe-add-bad')?.value || '')
+    };
+    if (!body.trigger) { const h = $('#pe-add-hint'); if (h) h.textContent = '触发句不能为空'; return; }
+    try {
+      await api('/api/persona/examples', { method: 'POST', body: JSON.stringify(body) });
+      await loadPersonaExamplesPanel();
+      const h = $('#pe-add-hint');
+      if (h) h.textContent = '已添加为待审 ✓';
+    } catch (e) {
+      const h = $('#pe-add-hint');
+      if (h) h.textContent = `添加失败：${e.message}`;
+    }
+  });
+
+  // 行内操作：晋升/撤回、编辑（复用收进人设弹窗）、删除
+  box.querySelectorAll('.pe-row').forEach((rowEl) => {
+    const id = rowEl.dataset.id;
+    rowEl.querySelector('.pe-status')?.addEventListener('click', async (e) => {
+      const status = e.currentTarget.dataset.status;
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/persona/examples/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ status })
+        });
+        await loadPersonaExamplesPanel();
+      } catch (err) {
+        e.currentTarget.disabled = false;
+        // 409 查重等后端原因直接亮给用户（api() 已把 error 文本带回来）
+        alert(err.message);
+      }
+    });
+    rowEl.querySelector('.pe-edit')?.addEventListener('click', () => {
+      const ex = (state.personaExamples || []).find((x) => x.id === id);
+      if (ex) openPersonaExampleModal({ example: ex, onSaved: loadPersonaExamplesPanel });
+    });
+    rowEl.querySelector('.pe-del')?.addEventListener('click', async () => {
+      if (!(await uiConfirm('确定删除这条示例？删除后不可恢复（只是撤回请用「撤回」按钮）。'))) return;
+      try {
+        await api(`/api/persona/examples/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' });
+        await loadPersonaExamplesPanel();
+      } catch (e) {
+        alert(`删除失败：${e.message}`);
+      }
+    });
+  });
+}
+
 function bindSettingsEvents(c) {
   /* ── 即时保存：任何设置项变动 → 防抖 600ms 自动保存 ──
      变动的设置块背景变成流动的浅黄色渐变（.dirty-glow）。
@@ -920,6 +1046,9 @@ function bindSettingsEvents(c) {
       btn.textContent = hasDot ? `${n} ●` : n;
     });
   }).catch(() => {});
+
+  // ── 回复示例库面板（P1）：容器只在人设区渲染，在场才拉数据 ──
+  if ($('#persona-examples-panel')) loadPersonaExamplesPanel();
 
   // ── 检查更新（桌面端区块） ──
   const curVerEl = $('#update-current');

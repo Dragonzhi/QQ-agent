@@ -272,6 +272,31 @@ function renderChatMessages() {
       cb.closest('tr')?.classList.toggle('quote-selected', cb.checked);
     });
   }
+  // 「收进人设」：同金句勾选的委托模式（容器只绑一次）。点击 → capture →
+  // 用返回的 entry/before 上下文打开编辑弹窗；捕获的示例已建为 pending，
+  // 弹窗里只是编辑预填内容，取消也不影响这条待审数据（可在设置页删除）。
+  if (!detail.__captureBound) {
+    detail.__captureBound = true;
+    detail.addEventListener('click', async (e) => {
+      const btn = e.target.closest?.('.persona-capture-btn');
+      if (!btn || btn.disabled) return;
+      const key = state.currentChatKey;
+      const id = Number(btn.dataset.captureId);
+      if (!key || !Number.isFinite(id)) return;
+      btn.disabled = true;
+      try {
+        const r = await api('/api/persona/examples/capture', {
+          method: 'POST',
+          body: JSON.stringify({ chatKey: key, localId: id })
+        });
+        openPersonaExampleModal({ example: r.draft, entry: r.entry, before: r.before || [] });
+      } catch (err) {
+        alert(`收进人设失败：${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 }
 
 /**
@@ -310,11 +335,17 @@ function chatMsgRowHtml(m) {
     : '';
   const sel = state.quoteMode && state.quoteSelected.has(m.id) ? ' quote-selected' : '';
   const dsel = state.chatDeleteMode && state.chatDeleteSelected.has(m.id) ? ' chat-del-selected' : '';
+  // 「收进人设」：只有机器人自己的回复可收藏（示例的好回复来自实战发言）。
+  // hover 行时浮现（样式见 style.css 末尾），点击走 __captureBound 事件委托 ——
+  // tbody 会被轮询/滚动加载整块重建，按钮必须跟着行模板走。
+  const capBtn = m.self
+    ? `<button type="button" class="btn btn-small persona-capture-btn" data-capture-id="${m.id}" title="把这条回复连同上文收进人设示例库">收进人设</button>`
+    : '';
   return `
     <tr class="${m.read ? '' : 'unread'}${sel}${dsel}" data-midrow="${m.id}">${q}${d}
       <td class="t">${fmtTime(m.ts)}</td>
       <td class="w ${m.self ? 'self' : ''}">${m.self ? '我' : esc(m.senderName)}</td>
-      <td class="text">${esc(m.text)}${m.read ? '' : ' <span class="unread-pill">未读</span>'}</td>
+      <td class="text">${capBtn}${esc(m.text)}${m.read ? '' : ' <span class="unread-pill">未读</span>'}</td>
     </tr>`;
 }
 

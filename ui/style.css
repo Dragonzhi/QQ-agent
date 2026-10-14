@@ -1795,3 +1795,38 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
     scroll-behavior: auto !important;
   }
 }
+
+/* ══ 回复示例库（doc/persona-meme-plan.md P1：存档页收藏 + 设置页面板）══
+   全部沿用既有设计 token，不引入新颜色字面量 */
+/* 存档表行内的「收进人设」：hover 行时浮现，避免每行常驻按钮太吵 */
+.persona-capture-btn {
+  float: right; margin-left: 10px; height: 20px; padding: 0 8px; font-size: 11px;
+  opacity: 0; pointer-events: none; transition: opacity .15s ease;
+}
+.archive-table tr:hover .persona-capture-btn { opacity: 1; pointer-events: auto; }
+/* 收进人设弹窗：上下文只读区（当时的群友消息 + 机器人回复） */
+.pe-context {
+  background: var(--bg0); border: 1px solid var(--bd); border-radius: var(--r-sm);
+  padding: 8px 10px; max-height: 160px; overflow-y: auto;
+}
+.pe-context-row { font-size: 12.5px; color: var(--tx2); padding: 2px 0; word-break: break-word; }
+.pe-context-row.self { color: var(--ac); }
+.pe-context-row .pe-context-name { margin-right: 6px; color: var(--tx3); }
+/* 设置页示例库面板 */
+.pe-add-form textarea, .pe-add-form input[type="text"] { width: 100%; margin-top: 6px; }
+.pe-group { margin-bottom: 12px; }
+.pe-group-head { font-size: 12.5px; font-weight: 700; color: var(--tx2); margin-bottom: 6px; }
+.pe-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin-bottom: 6px;
+  background: var(--bg0); border: 1px solid var(--bd); border-radius: var(--r-sm);
+}
+.pe-row .pe-source {
+  flex-shrink: 0; font-size: 10.5px; color: var(--tx3);
+  border: 1px solid var(--bd2); border-radius: 999px; padding: 1px 7px;
+}
+.pe-row .pe-trigger {
+  flex-shrink: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--tx); font-weight: 600;
+}
+.pe-row .pe-good { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); }
+.pe-row .pe-actions { display: flex; gap: 4px; flex-shrink: 0; }

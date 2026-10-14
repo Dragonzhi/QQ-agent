@@ -300,6 +300,27 @@ export class ChatStore {
   }
 
   /**
+   * 只读上下文切片：目标消息 + 它之前最多 beforeCount 条**非 self** 消息。
+   *
+   * 「收进人设」（doc/persona-meme-plan.md P1）用：机器人刚发的那条是 target，
+   * 它前面的群友消息是触发场景 —— 示例的 trigger 就从这里预填。
+   * before 保持数组原序（时间正序）；纯查询不改状态不落盘；id 不存在返回 null。
+   */
+  contextSlice(chatKey, localId, beforeCount = 2) {
+    const st = this.#state(chatKey);
+    const idx = st.messages.findIndex((m) => m.id === Number(localId));
+    if (idx < 0) return null;
+    const cap = Math.max(0, Number(beforeCount) || 0);
+    const before = [];
+    // 倒着找够 cap 条非 self 的，再 unshift 回正序 —— 数组可能很长，
+    // 找满即停，不扫全量
+    for (let i = idx - 1; i >= 0 && before.length < cap; i--) {
+      if (!st.messages[i].self) before.unshift(st.messages[i]);
+    }
+    return { target: st.messages[idx], before };
+  }
+
+  /**
    * 删除指定本地 id 的消息（部分清除）。返回删掉的条数。
    * @param {string} chatKey
    * @param {number[]} localIds 本地递增 id 数组

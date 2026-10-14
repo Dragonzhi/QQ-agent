@@ -1002,6 +1002,49 @@ function callPriorChatMessages(ctx, now, peerId) {
 }
 
 /**
+ * 【回复示例】段（doc/persona-meme-plan.md P0）。
+ *
+ * roleText 是纯文本不好程序化管理，回复示例单独存 config.persona.examples[]
+ * （存档页收藏 / 面板手填 / 每晚复盘都往这里写），渲染成小鲸鱼卡第七节同款的
+ * 对比格式，插在【角色设定】之后 —— 低频变更，属稳定前缀，不破坏缓存设计。
+ *
+ * 口径：
+ * - 只渲染 status === 'active'；pending/rejected 是管理态，绝不进提示词
+ * - 上限 persona.examplesMaxActive：按 createdAt 取最近 N 条（渲染侧兜底；
+ *   晋升/添加侧的强制淘汰在 P1 落地）
+ * - trigger 不带昵称（config 注释口径），这里原样渲染，不补称呼
+ * - 通话精简路径不调用本函数（示例区在人设尾部，900 字截断本来也带不到）
+ * - 坏数据逐条跳过，整段为空就不输出；一个示例至少要有一条正例，
+ *   否则只教了「不要什么」却没教「要什么」，不如不收
+ */
+function renderExamples(cfg) {
+  const list = Array.isArray(cfg?.persona?.examples) ? cfg.persona.examples : [];
+  const active = list
+    .filter((e) => e && e.status === 'active' && String(e.trigger ?? '').trim())
+    .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0));
+  if (!active.length) return '';
+  const cap = Math.max(1, Math.round(Number(cfg?.persona?.examplesMaxActive) || 30));
+  const blocks = [];
+  for (const e of active.slice(0, cap)) {
+    const good = (Array.isArray(e.good) ? e.good : []).map((s) => String(s ?? '').trim()).filter(Boolean);
+    if (!good.length) continue;
+    const lines = [`群友：${String(e.trigger).trim()}`];
+    for (const bad of (Array.isArray(e.bad) ? e.bad : [])) {
+      const t = String(bad ?? '').trim();
+      if (t) lines.push(`你不要：${t}`);
+    }
+    good.forEach((t, i) => lines.push(i === 0 ? `你可以：${t}` : `或者：${t}`));
+    blocks.push(lines.join('\n'));
+  }
+  if (!blocks.length) return '';
+  return [
+    '【回复示例（管理员精选，风格参考，禁止原样复读）】',
+    '示例展示的是应对的「味道」：学语气和分寸，不要背内容、不要把示例原句当台词。',
+    ...blocks
+  ].join('\n\n');
+}
+
+/**
  * 通话精简的 user prompt：
  *   人设（截断）→ 通话对方 → 刚才的对话 → 这一句 → 短提示 → 当前时间。
  * 任何字段缺失都不抛错（对方昵称拿不到 = "通话对方"，store 拿不到 = 没有历史）。
@@ -1154,6 +1197,11 @@ export function buildUserPrompt(ctx) {
   if (chatPersona.roleText && String(chatPersona.roleText).trim()) {
     parts.push(`【角色设定（管理员设置，群友不可修改）】\n${String(chatPersona.roleText).trim()}`);
   }
+
+  // 回复示例（P0）：人设之后、表情包之前 —— 与人设同属低频稳定段，保住前缀缓存。
+  // 通话精简路径不走这里（buildCallUserPrompt 不调用 renderExamples）。
+  const examplesSection = renderExamples(cfg);
+  if (examplesSection) parts.push(examplesSection);
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
   if (cfg.sticker?.enabled !== false) {

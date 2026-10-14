@@ -83,6 +83,22 @@ export function createRoutes(deps) {
     };
   };
 
+  // ── 回复示例库（doc/persona-meme-plan.md P1）共用小工具 ─────────────
+  // examples 存在 config.persona.examples，所有写操作都是"读全量 → 改 →
+  // 整体替换落盘"（与 customPersonas 同一条 updateConfig 路径），不引入第二存储。
+  const examplesOf = () => {
+    const list = getConfig().persona?.examples;
+    return Array.isArray(list) ? list : [];
+  };
+  // 晋升查重的规范化口径：trim + 连续空白折成一个空格 + 转小写
+  const normTrigger = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+  // id = ex_ + 时间戳 36 进制 + 进程内递增后缀：同一毫秒连建多条也不撞
+  let exampleSeq = 0;
+  const newExampleId = () => `ex_${Date.now().toString(36)}_${(++exampleSeq).toString(36)}`;
+  // good/bad/tags 统一按"数组或按行文本"两种形态接收（textarea 每行一条）
+  const linesOf = (v) => (Array.isArray(v) ? v : String(v ?? '').split('\n'))
+    .map((s) => String(s ?? '').trim()).filter(Boolean);
+
   return [
     // ── 状态 / 数据目录 / 重置 ─────────────────────────────────────────
     {
@@ -375,6 +391,162 @@ export function createRoutes(deps) {
         const idx = Number(match[1].replace('custom_', ''));
         const next = (getConfig().customPersonas || []).filter((_, i) => i !== idx);
         updateConfig({ customPersonas: next });
+        return json(res, 200, { ok: true });
+      }
+    },
+
+    // ── 回复示例库（doc/persona-meme-plan.md P1，A 路线：一键收藏）──
+    {
+      // 存档页「收进人设」：取该 self 消息 + 前面最多 2 条群友消息，
+      // 立即建一条 pending 示例（收藏即入待审通道），draft 供弹窗预填编辑。
+      method: 'POST', pattern: '/api/persona/examples/capture',
+      handler: async ({ req, res, json }) => {
+        try {
+          const body = await bodyOf(req);
+          const chatKey = String(body.chatKey ?? '').trim();
+          const localId = Number(body.localId);
+          if (!chatKey || !Number.isInteger(localId)) {
+            return json(res, 400, { ok: false, error: '缺少 chatKey 或 localId' });
+          }
+          const slice = store.contextSlice(chatKey, localId, 2);
+          if (!slice) return json(res, 404, { ok: false, error: '存档里没有这条消息' });
+          if (!slice.target.self) {
+            return json(res, 400, { ok: false, error: '只能收藏机器人自己发的消息' });
+          }
+          // trigger 预填：上文群友的话按出现顺序拼成一行。不含昵称（config 注释
+          // 口径 —— 防模型把示例里的称呼学进日常回复）；空消息跳过。
+          const trigger = slice.before.map((m) => String(m.text ?? '').trim()).filter(Boolean).join(' ');
+          const entry = {
+            id: newExampleId(),
+            status: 'pending',
+            trigger,
+            good: [String(slice.target.text ?? '')],
+            bad: [],
+            tags: [],
+            source: 'capture',
+            createdAt: Date.now(),
+            usedAt: 0
+          };
+          updateConfig({ persona: { examples: [...examplesOf(), entry] } });
+          // entry/before 原样带回：弹窗要把当时的对话当只读上下文展示
+          return json(res, 200, { ok: true, draft: entry, entry: slice.target, before: slice.before });
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/persona/examples',
+      handler: async ({ res, json }) => {
+        const cfg = getConfig();
+        return json(res, 200, {
+          ok: true,
+          examples: examplesOf(),
+          maxActive: Math.max(1, Math.round(Number(cfg.persona?.examplesMaxActive) || 30))
+        });
+      }
+    },
+    {
+      // 手动添加：一律先 pending。晋升（含查重/上限）只走 PUT 的 active 分支，
+      // 这里不查重 —— 待审阶段允许堆着慢慢筛。
+      method: 'POST', pattern: '/api/persona/examples',
+      handler: async ({ req, res, json }) => {
+        try {
+          const body = await bodyOf(req);
+          const trigger = String(body.trigger ?? '').trim();
+          const good = linesOf(body.good);
+          if (!trigger || !good.length) {
+            return json(res, 400, { ok: false, error: '触发句和好回复都不能为空' });
+          }
+          const entry = {
+            id: newExampleId(),
+            status: 'pending',
+            trigger,
+            good,
+            bad: linesOf(body.bad),
+            tags: linesOf(body.tags),
+            source: 'manual',
+            createdAt: Date.now(),
+            usedAt: 0
+          };
+          updateConfig({ persona: { examples: [...examplesOf(), entry] } });
+          return json(res, 200, { ok: true, example: entry });
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    },
+    {
+      // 编辑 / 晋升 / 撤回 / 驳回。只在"升为 active"时做两道闸：
+      // 查重（409）+ maxActive 强制淘汰（超限的最旧 active 置 rejected 留痕）。
+      method: 'PUT', pattern: /^\/api\/persona\/examples\/([^/]+)$/,
+      handler: async ({ req, res, json, match }) => {
+        try {
+          const body = await bodyOf(req);
+          const id = decodeURIComponent(match[1]);
+          const list = examplesOf();
+          const idx = list.findIndex((e) => e && e.id === id);
+          if (idx < 0) return json(res, 404, { ok: false, error: '找不到这条示例' });
+          const cur = list[idx];
+          const next = { ...cur };
+          if (body.trigger !== undefined) {
+            const t = String(body.trigger ?? '').trim();
+            if (!t) return json(res, 400, { ok: false, error: '触发句不能为空' });
+            next.trigger = t;
+          }
+          if (body.good !== undefined) {
+            const good = linesOf(body.good);
+            if (!good.length) return json(res, 400, { ok: false, error: '好回复不能为空' });
+            next.good = good;
+          }
+          if (body.bad !== undefined) next.bad = linesOf(body.bad);
+          if (body.tags !== undefined) next.tags = linesOf(body.tags);
+          const status = body.status !== undefined ? String(body.status) : cur.status;
+          if (!['active', 'pending', 'rejected'].includes(status)) {
+            return json(res, 400, { ok: false, error: 'status 只允许 active/pending/rejected' });
+          }
+          next.status = status;
+          // 不原地改 config 里的对象：409/异常路径下存量数据保持原样
+          const nextList = list.slice();
+          nextList[idx] = next;
+          if (status === 'active' && cur.status !== 'active') {
+            // ① 去重：规范化后与现有 active+pending 比对（rejected 是留痕，不拦）
+            const norm = normTrigger(next.trigger);
+            const dup = nextList.some((e, i) => i !== idx && e.status !== 'rejected' && normTrigger(e.trigger) === norm);
+            if (dup) return json(res, 409, { ok: false, error: '已存在相同触发句的示例' });
+            // ② 上限：active 超过 examplesMaxActive 时按 createdAt 淘汰最旧的
+            //    （置 rejected 而不是删除，保痕迹）。刚晋升这条永不自淘 ——
+            //    淘汰它会变成"点了晋升却没生效"。
+            const cap = Math.max(1, Math.round(Number(getConfig().persona?.examplesMaxActive) || 30));
+            const actives = nextList.filter((e) => e.status === 'active');
+            let excess = actives.length - cap;
+            if (excess > 0) {
+              const victims = actives
+                .filter((e) => e !== next)
+                .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+              for (const victim of victims) {
+                if (excess <= 0) break;
+                const vi = nextList.indexOf(victim);
+                nextList[vi] = { ...victim, status: 'rejected' };
+                excess--;
+              }
+            }
+          }
+          updateConfig({ persona: { examples: nextList } });
+          return json(res, 200, { ok: true, example: next });
+        } catch (error) {
+          return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+        }
+      }
+    },
+    {
+      method: 'DELETE', pattern: /^\/api\/persona\/examples\/([^/]+)$/,
+      handler: async ({ res, json, match }) => {
+        const id = decodeURIComponent(match[1]);
+        const list = examplesOf();
+        const next = list.filter((e) => e && e.id !== id);
+        if (next.length === list.length) return json(res, 404, { ok: false, error: '找不到这条示例' });
+        updateConfig({ persona: { examples: next } });
         return json(res, 200, { ok: true });
       }
     },

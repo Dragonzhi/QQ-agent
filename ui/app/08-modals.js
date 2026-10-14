@@ -256,6 +256,66 @@ function openPersonaCreateModal() {
 }
 
 /**
+ * 「收进人设」编辑弹窗（doc/persona-meme-plan.md P1，A 路线）：
+ *   - 存档页点「收进人设」→ 后端已建 pending 示例 → 带 entry/before 上下文打开这里；
+ *   - 设置页示例库点「编辑」→ 同一弹窗，无上下文区。
+ * 保存 = PUT /api/persona/examples/:id（不传 status，保持待审/原状态）；
+ * 晋升不在弹窗里做 —— 审批统一收在设置页面板，避免两个入口两套口径。
+ */
+function openPersonaExampleModal({ example = null, entry = null, before = [], onSaved = null } = {}) {
+  const ex = example || {};
+  const contextHtml = (before.length || entry) ? `
+      <div class="field"><label>当时的上下文（只读，仅供参考）</label>
+        <div class="pe-context">
+          ${(before || []).map((m) => `
+            <div class="pe-context-row"><span class="pe-context-name">${esc(m.self ? '我' : (m.senderName || '群友'))}</span>${esc(m.text)}</div>`).join('')}
+          ${entry ? `
+            <div class="pe-context-row self"><span class="pe-context-name">${esc(entry.senderName || '我')}</span>${esc(entry.text)}</div>` : ''}
+        </div>
+        <div class="hint">示例只收录下面三个字段 —— 触发句不要带昵称，防止模型学会喊名字。</div>
+      </div>` : '';
+  const overlay = modelModalShell({
+    head: '收进人设 · 回复示例',
+    body: `
+      ${contextHtml}
+      <div class="field"><label>触发句（群友会说什么）</label>
+        <input type="text" id="pe-trigger" value="${esc(ex.trigger || '')}" placeholder="例如：华莱士不敢吃 吃一次拉一次" /></div>
+      <div class="field"><label>好回复（每行一条，可给几个变体）</label>
+        <textarea id="pe-good" style="min-height:72px" placeholder="每行一条">${esc((ex.good || []).join('\n'))}</textarea></div>
+      <div class="field"><label>坏回复（可选，每行一条：太 AI 味的说法）</label>
+        <textarea id="pe-bad" style="min-height:48px" placeholder="可留空"></textarea></div>
+      <div class="hint" id="pe-hint">${ex.id ? '保存后仍为待审，去设置页晋升后生效。' : ''}</div>`,
+    foot: `<button class="btn" id="pe-cancel">取消</button>
+           <button class="btn btn-primary" id="pe-save">保存</button>`
+  });
+  overlay.querySelector('#pe-cancel').addEventListener('click', () => closeModelModal(overlay));
+  overlay.querySelector('#pe-save').addEventListener('click', async () => {
+    const hint = overlay.querySelector('#pe-hint');
+    const trigger = overlay.querySelector('#pe-trigger').value.trim();
+    const good = overlay.querySelector('#pe-good').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    const bad = overlay.querySelector('#pe-bad').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    if (!trigger) { if (hint) hint.textContent = '触发句不能为空'; return; }
+    if (!good.length) { if (hint) hint.textContent = '好回复至少要有一条'; return; }
+    if (!ex.id) { if (hint) hint.textContent = '缺少示例 id，请重新从存档页收藏'; return; }
+    const btn = overlay.querySelector('#pe-save');
+    btn.disabled = true;
+    try {
+      await api(`/api/persona/examples/${encodeURIComponent(ex.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ trigger, good, bad })
+      });
+      if (hint) hint.textContent = '已存入待审，去设置页晋升后生效。';
+      // 留 1.4s 让用户读完提示再关；期间窗口已不可再点（按钮 disabled）
+      setTimeout(() => closeModelModal(overlay), 1400);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (e) {
+      btn.disabled = false;
+      if (hint) hint.textContent = `保存失败：${e.message}`;
+    }
+  });
+}
+
+/**
  * 「模型配置」模态框（2026-09-18 改版）：收纳原页面的
  * 模型目录 / Base URL / API Key / 图片视频专用模型 / 图片视频开关 / 视频理解方式。
  * 保存按钮 = 把这些字段 PATCH 到 /api/config（掩码 Key 不回传，与主页面同语义）。

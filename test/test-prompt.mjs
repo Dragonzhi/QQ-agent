@@ -71,6 +71,7 @@ for (const banned of ['沉睡前观察', 'qq_wait_for_messages', 'qq_set_wake_co
 // ── 2. 用户提示：包含当前实现的真实段落 ──
 // 注意：段落清单必须与 buildUserPrompt 实际产出保持一致。
 // 当前实现产出：【当前时间】【角色设定】【已读信息】【未读信息】【记忆】【可用表情包】【引导说明】
+// 条件段：【回复示例】—— config.persona.examples 里有 active 条目时，插在【角色设定】之后。
 // （2026-09-25 改版：【此刻状态】删除、【过去状态】→【已读信息】、【本次唤醒】→【未读信息】。）
 const store = makeStore();
 const memory = new MemoryStore();
@@ -229,6 +230,57 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   );
   assert.equal(text, '@摸鱼小能手 鱼来了', '渲染文本保持原样（@ 片段仍在正文里）');
   assert.deepEqual(marks, [{ qq: '12345', text: '@摸鱼小能手' }], '收集器应给出 @ 段的 QQ 号与渲染原文');
+}
+
+// ── 10. 回复示例渲染（doc/persona-meme-plan.md P0）──────────────────────
+{
+  const build = (runSeq) => buildUserPrompt({
+    chatKey: 'group:123', kind: 'group', chatId: '123', chatName: '测试群',
+    triggerEntries, store, memory,
+    stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],   // 非空，保证【可用表情包】段存在，供位置断言
+    selfNickname: '测试机', runSeq, moreUnreadDuringRun: false, proactive: false
+  });
+  const mk = (over = {}) => ({
+    id: 'ex_t', status: 'active', trigger: '华莱士不敢吃',
+    good: ['草 勇士', '完了 已经点了'], bad: ['注意食品安全'],
+    tags: [], source: 'manual', createdAt: 1000, usedAt: 0, ...over
+  });
+
+  // 基线：示例为空 → 不出【回复示例】段
+  cfg.persona.examples = [];
+  assert.ok(!build(21).includes('【回复示例'), '无示例时不应出现【回复示例】段');
+
+  // 渲染格式 + 状态过滤 + 段落位置
+  cfg.persona.examples = [
+    mk({ id: 'a', createdAt: 3 }),
+    mk({ id: 'b', status: 'pending', trigger: '待审的不许出现', createdAt: 4 }),
+    mk({ id: 'c', status: 'rejected', trigger: '驳回的不许出现', createdAt: 5 }),
+    mk({ id: 'd', good: [], trigger: '没有正例的不许出现', createdAt: 6 })
+  ];
+  const p1 = build(22);
+  assert.ok(p1.includes('【回复示例'), '有 active 示例应出现示例段');
+  assert.ok(p1.includes('群友：华莱士不敢吃'), 'trigger 渲染为「群友：」行');
+  assert.ok(p1.includes('你不要：注意食品安全'), 'bad 渲染为「你不要：」行');
+  assert.ok(p1.includes('你可以：草 勇士'), 'good[0] 渲染为「你可以：」行');
+  assert.ok(p1.includes('或者：完了 已经点了'), 'good[1+] 渲染为「或者：」行');
+  assert.ok(!p1.includes('待审的不许出现'), 'pending 条目不渲染');
+  assert.ok(!p1.includes('驳回的不许出现'), 'rejected 条目不渲染');
+  assert.ok(!p1.includes('没有正例的不许出现'), '无正例条目不渲染（只教不要不教可以的没意义）');
+  const h = (m) => p1.indexOf(m);
+  assert.ok(h('【角色设定（管理员设置') < h('【回复示例') && h('【回复示例') < h('【可用表情包】'),
+    '示例段应在【角色设定】之后、【可用表情包】之前');
+
+  // 上限切片：按 createdAt 取最近 examplesMaxActive 条，最旧的被挤出
+  cfg.persona.examples = [
+    mk({ id: 'old', trigger: '最老的不许出现', createdAt: 0 }),
+    ...[1, 2, 3].map((i) => mk({ id: `n${i}`, trigger: `新梗${i}`, createdAt: i }))
+  ];
+  cfg.persona.examplesMaxActive = 3;
+  const p2 = build(23);
+  assert.ok(p2.includes('新梗1') && p2.includes('新梗3'), '上限内的条目全部渲染');
+  assert.ok(!p2.includes('最老的不许出现'), '超上限的最旧条目不渲染');
+  cfg.persona.examplesMaxActive = 30;
+  cfg.persona.examples = [];
 }
 
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }

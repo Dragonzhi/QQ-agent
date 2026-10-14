@@ -183,7 +183,25 @@ export const DEFAULT_CONFIG = {
     // ⚠️ 高级功能：默认提示词包含安全规则/工具协议/反AI味等关键约束，
     //    覆盖后这些全部失效，需自行在覆盖文本里写明。留空 = 用内置默认提示词。
     // 可用占位符：{botName} {roleText} {participation}
-    systemPromptOverride: ''
+    systemPromptOverride: '',
+    // ── 回复示例库（doc/persona-meme-plan.md P0）──
+    // 管理员从实战沉淀的「群友：X → 你不要/你可以：Y」对比示例，渲染进用户提示的
+    // 【回复示例】段（【角色设定】之后）。字段：{ id, status, trigger, good[], bad[],
+    // tags[], source, createdAt, usedAt }。status 非 'active' 不渲染 ——
+    // pending 供收藏/复盘的待审通道，rejected 只做留痕。trigger 不写群友昵称，
+    // 防模型把示例里的称呼学进日常回复。
+    examples: [],
+    // active 示例硬上限：渲染只取最近 N 条，晋升/添加侧也按此强制淘汰，
+    // 防止示例无限膨胀推高每会话 token 成本。
+    examplesMaxActive: 30,
+    // ── 每晚复盘（P2，当前仅预留配置位）──
+    // 到点自动起草候选示例与群内梗，全部只进 pending，人工审批后才生效。
+    review: {
+      enabled: false,   // 总开关
+      hour: 4,          // 每天几点触发（0~23，本地时间）
+      maxDrafts: 5,     // 单次最多起草几条候选示例
+      groupMemes: true  // 是否顺带收集群内自产梗（data/group-memes/<chatId>.json）
+    }
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）
   customPersonas: [],

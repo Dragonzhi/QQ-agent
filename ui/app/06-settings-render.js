@@ -471,6 +471,21 @@ function renderPersonaSection(c) {
         <button class="btn" id="open-global-persona-btn">⚙ 全局人设设置（未单独配置的会话用这套）</button>
       </div>
       <div class="persona-chat-grid">${chatButtons || '<div class="hint">（白名单为空——先在「聊天白名单」里添加群聊/私聊）</div>'}</div>
+    </div>
+    ${personaExamplesPanel()}`;
+}
+
+/**
+ * 「回复示例库」面板骨架（doc/persona-meme-plan.md P1）：
+ * 人设编辑区块下方的实战示例沉淀区。数据是异步的（GET /api/persona/examples，
+ * 不在 state.config 里 —— 示例走专用端点而不是 /api/config 的表单保存链），
+ * 这里只出容器，由 07-settings-events 的 loadPersonaExamplesPanel() 拉数据
+ * 填充并绑事件（与"群名补底"同一套异步补绘模式）。
+ */
+function personaExamplesPanel() {
+  return `
+    <div id="persona-examples-panel" style="margin-top:20px">
+      <div class="hint">回复示例库加载中…</div>
     </div>`;
 }
 

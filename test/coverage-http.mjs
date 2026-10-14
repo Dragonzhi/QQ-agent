@@ -212,6 +212,87 @@ c.section('3. 人设模板');
   });
 }
 
+// ── 3B. 回复示例库（doc/persona-meme-plan.md P1）─────────────────────
+c.section('3B. 回复示例库');
+{
+  // group:456 在文件开头建了 3 条消息：id1/id2 群友、id3 机器人自己
+  await c.check('POST /api/persona/examples/capture：收 self 消息并建 pending', async () => {
+    const r = await hit('POST', '/api/persona/examples/capture', { body: { chatKey: 'group:456', localId: 3 } });
+    assert.equal(r.status, 200, `应 200，实际 ${r.status}：${JSON.stringify(r.data)}`);
+    assert.equal(r.data.ok, true);
+    assert.equal(r.data.entry.self, true, 'entry 应原样带回且是 self 消息');
+    assert.equal(r.data.draft.status, 'pending');
+    assert.equal(r.data.draft.source, 'capture');
+    assert.match(r.data.draft.id, /^ex_/, 'id 应是 ex_ 前缀');
+    assert.equal(r.data.draft.good[0], '机器人的一句回复');
+    // trigger 预填 = 前面最多 2 条非 self 消息按时间正序拼一行
+    assert.equal(r.data.draft.trigger, '覆盖测试消息一 覆盖测试消息二');
+    assert.equal(r.data.before.length, 2);
+  });
+
+  await c.check('POST /api/persona/examples/capture：非 self 消息 400、不存在的 id 404', async () => {
+    const bad = await hit('POST', '/api/persona/examples/capture', { body: { chatKey: 'group:456', localId: 1 } });
+    assert.equal(bad.status, 400, '群友消息应 400');
+    assert.match(String(bad.data.error || ''), /自己/);
+    const missing = await hit('POST', '/api/persona/examples/capture', { body: { chatKey: 'group:456', localId: 99999 } });
+    assert.equal(missing.status, 404);
+  });
+
+  await c.check('POST /api/persona/examples：手动添加（空 good 400 / 正常 pending）', async () => {
+    const empty = await hit('POST', '/api/persona/examples', { body: { trigger: '只有触发句', good: ['  ', '\n'] } });
+    assert.equal(empty.status, 400, 'good 全空白应 400');
+    const ok = await hit('POST', '/api/persona/examples', { body: { trigger: '今晚吃什么', good: ['随便', '火锅？'], bad: ['我可以帮您推荐美食哦～'] } });
+    assert.equal(ok.status, 200);
+    assert.equal(ok.data.example.status, 'pending');
+    assert.equal(ok.data.example.source, 'manual');
+  });
+
+  await c.check('PUT /api/persona/examples/:id：晋升去重 409（规范化 trigger）', async () => {
+    // a 的 trigger 带双空格：规范化（trim + 折空白 + 小写）后为「周末 去哪玩」
+    const a = await hit('POST', '/api/persona/examples', { body: { trigger: '周末  去哪玩', good: ['睡覺'] } });
+    const promote = await hit('PUT', `/api/persona/examples/${a.data.example.id}`, { body: { status: 'active' } });
+    assert.equal(promote.status, 200, '首次晋升应成功');
+    // 不同写法但规范化后相同（首尾空白 + 单空格）：去重应拦下
+    const b = await hit('POST', '/api/persona/examples', { body: { trigger: '  周末 去哪玩  ', good: ['随便浪'] } });
+    const dup = await hit('PUT', `/api/persona/examples/${b.data.example.id}`, { body: { status: 'active' } });
+    assert.equal(dup.status, 409, '重复 trigger 晋升应 409');
+    assert.equal(dup.data.ok, false);
+    assert.match(String(dup.data.error || ''), /相同触发句/);
+    // 非法 status 400
+    const badStatus = await hit('PUT', `/api/persona/examples/${b.data.example.id}`, { body: { status: 'published' } });
+    assert.equal(badStatus.status, 400);
+  });
+
+  await c.check('PUT /api/persona/examples/:id：超 maxActive 淘汰最旧 active（置 rejected 不删）', async () => {
+    // 把上限压到 1，让淘汰路径必然触发；测完恢复默认 30
+    await hit('POST', '/api/config', { body: { persona: { examplesMaxActive: 1 } } });
+    const x = await hit('POST', '/api/persona/examples', { body: { trigger: '上限测试甲', good: ['好'] } });
+    const y = await hit('POST', '/api/persona/examples', { body: { trigger: '上限测试乙', good: ['好'] } });
+    await hit('PUT', `/api/persona/examples/${x.data.example.id}`, { body: { status: 'active' } });
+    const p2 = await hit('PUT', `/api/persona/examples/${y.data.example.id}`, { body: { status: 'active' } });
+    assert.equal(p2.status, 200);
+    const list = await hit('GET', '/api/persona/examples');
+    const byId = new Map(list.data.examples.map((e) => [e.id, e]));
+    assert.equal(byId.get(x.data.example.id).status, 'rejected', '最旧的 active 应被置为 rejected');
+    assert.equal(byId.get(y.data.example.id).status, 'active', '刚晋升的应保持 active');
+    assert.ok(list.data.examples.some((e) => e.id === x.data.example.id), '淘汰不等于删除，留痕');
+    await hit('POST', '/api/config', { body: { persona: { examplesMaxActive: 30 } } });
+  });
+
+  await c.check('PUT/DELETE /api/persona/examples/:id：编辑保持 pending、删除生效', async () => {
+    const m = await hit('POST', '/api/persona/examples', { body: { trigger: '待编辑', good: ['旧回复'] } });
+    const id = m.data.example.id;
+    const edit = await hit('PUT', `/api/persona/examples/${id}`, { body: { trigger: '已编辑', good: ['新回复', '变体'], bad: ['AI 味回复'] } });
+    assert.equal(edit.status, 200);
+    assert.equal(edit.data.example.status, 'pending', '不带 status 的编辑保持 pending');
+    assert.deepEqual(edit.data.example.good, ['新回复', '变体']);
+    const del = await hit('DELETE', `/api/persona/examples/${id}`);
+    assert.equal(del.status, 200);
+    const gone = await hit('DELETE', `/api/persona/examples/${id}`);
+    assert.equal(gone.status, 404, '再删应 404');
+  });
+}
+
 // ── 4. Skill / 工具 ──────────────────────────────────────────────────────
 c.section('4. Skill / 工具');
 {

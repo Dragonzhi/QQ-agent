@@ -24,7 +24,9 @@ import {
 } from './providers.js';
 import { scanModelsVision, visionResults, modelImageVerdict } from './vision-scan.js';
 import { builtinVisionResults } from './model-vision-docs.js';
-import { todayKey } from './util.js';
+import { todayKey, normTrigger } from './util.js';
+import { runReviewOnce } from './persona-review.js';
+import { loadMemes, saveMemes, listAllMemes, ACTIVE_CAP } from './group-memes.js';
 import { logger } from './logger.js';
 import { skillManager } from './skills/manager.js';
 import { getSkillConfig, setSkillConfig, setSkillEnabled, listConfiguredSkillIds } from './skills/config.js';
@@ -90,8 +92,6 @@ export function createRoutes(deps) {
     const list = getConfig().persona?.examples;
     return Array.isArray(list) ? list : [];
   };
-  // 晋升查重的规范化口径：trim + 连续空白折成一个空格 + 转小写
-  const normTrigger = (s) => String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
   // id = ex_ + 时间戳 36 进制 + 进程内递增后缀：同一毫秒连建多条也不撞
   let exampleSeq = 0;
   const newExampleId = () => `ex_${Date.now().toString(36)}_${(++exampleSeq).toString(36)}`;
@@ -547,6 +547,92 @@ export function createRoutes(deps) {
         const next = list.filter((e) => e && e.id !== id);
         if (next.length === list.length) return json(res, 404, { ok: false, error: '找不到这条示例' });
         updateConfig({ persona: { examples: next } });
+        return json(res, 200, { ok: true });
+      }
+    },
+
+    // ── 人设复盘 + 群梗库（doc/persona-meme-plan.md P2）──────────────
+    {
+      // 手动触发一轮复盘。runReviewOnce 内部已把一切错误收进 summary.errors，
+      // 这里 ok 恒为 true（=「执行完成」），成败明细看 summary。
+      method: 'POST', pattern: '/api/persona/review/run',
+      handler: async ({ res, json }) => {
+        const summary = await runReviewOnce({ log, store, sessions });
+        return json(res, 200, { ok: true, summary });
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/persona/group-memes',
+      handler: async ({ res, json }) => json(res, 200, { ok: true, chats: listAllMemes() })
+    },
+    {
+      // 编辑/晋升/撤回群梗。只在"升为 active"时做两道闸，照抄示例库逻辑：
+      // ① name 规范化查重（409，rejected 是留痕不拦）② 上限 ACTIVE_CAP=20
+      //（超限最旧 active 置 rejected 留痕，刚晋升这条永不自淘）。
+      method: 'PUT', pattern: /^\/api\/persona\/group-memes\/([^/]+)\/([^/]+)$/,
+      handler: async ({ req, res, json, match }) => {
+        // chatId 只接受纯数字：它是文件名的一部分，非数字一律 400（防路径穿越）；
+        // group-memes.js 的 memesFileFor 还有第二道 gid 校验兜底。
+        const chatId = String(match[1] ?? '');
+        if (!/^\d+$/.test(chatId)) return json(res, 400, { ok: false, error: 'chatId 只允许群号（纯数字）' });
+        const memId = decodeURIComponent(match[2]);
+        const body = await bodyOf(req);
+        const status = body.status !== undefined ? String(body.status) : undefined;
+        if (status !== undefined && !['active', 'pending', 'rejected'].includes(status)) {
+          return json(res, 400, { ok: false, error: 'status 只允许 active/pending/rejected' });
+        }
+        const { memes } = loadMemes(`group:${chatId}`);
+        const idx = memes.findIndex((m) => m && m.id === memId);
+        if (idx < 0) return json(res, 404, { ok: false, error: '找不到这条群梗' });
+        const cur = memes[idx];
+        const next = { ...cur };
+        if (body.name !== undefined) {
+          const n = String(body.name ?? '').trim();
+          if (!n) return json(res, 400, { ok: false, error: '梗名不能为空' });
+          next.name = n;
+        }
+        if (body.meaning !== undefined) {
+          const m2 = String(body.meaning ?? '').trim();
+          if (!m2) return json(res, 400, { ok: false, error: '含义不能为空' });
+          next.meaning = m2;
+        }
+        if (body.example !== undefined) next.example = String(body.example ?? '').trim();
+        next.status = status ?? cur.status;
+        // 不原地改数组元素：409/异常路径下存量数据保持原样（与示例库同款防呆）
+        const nextList = memes.slice();
+        nextList[idx] = next;
+        if (next.status === 'active' && cur.status !== 'active') {
+          const norm = normTrigger(next.name);
+          const dup = nextList.some((m, i) => i !== idx && m.status !== 'rejected' && normTrigger(m.name) === norm);
+          if (dup) return json(res, 409, { ok: false, error: '已存在同名群梗' });
+          const actives = nextList.filter((m) => m.status === 'active');
+          let excess = actives.length - Math.max(1, Number(ACTIVE_CAP) || 20);
+          if (excess > 0) {
+            const victims = actives
+              .filter((m) => m !== next)
+              .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0));
+            for (const victim of victims) {
+              if (excess <= 0) break;
+              const vi = nextList.indexOf(victim);
+              nextList[vi] = { ...victim, status: 'rejected' };
+              excess--;
+            }
+          }
+        }
+        saveMemes(`group:${chatId}`, nextList);
+        return json(res, 200, { ok: true, meme: next });
+      }
+    },
+    {
+      method: 'DELETE', pattern: /^\/api\/persona\/group-memes\/([^/]+)\/([^/]+)$/,
+      handler: async ({ res, json, match }) => {
+        const chatId = String(match[1] ?? '');
+        if (!/^\d+$/.test(chatId)) return json(res, 400, { ok: false, error: 'chatId 只允许群号（纯数字）' });
+        const memId = decodeURIComponent(match[2]);
+        const { memes } = loadMemes(`group:${chatId}`);
+        const next = memes.filter((m) => m && m.id !== memId);
+        if (next.length === memes.length) return json(res, 404, { ok: false, error: '找不到这条群梗' });
+        saveMemes(`group:${chatId}`, next);
         return json(res, 200, { ok: true });
       }
     },

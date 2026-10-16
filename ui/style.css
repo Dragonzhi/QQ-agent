@@ -1830,3 +1830,5 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 }
 .pe-row .pe-good { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tx2); }
 .pe-row .pe-actions { display: flex; gap: 4px; flex-shrink: 0; }
+/* 设置页「群内梗库」分区（P2）：按群分组的行复用 pe-row，只补分组间距 */
+.pe-meme-chat { margin-bottom: 10px; }

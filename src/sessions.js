@@ -473,26 +473,58 @@ export class SessionRegistry {
     return { dayKey, promptTokens, completionTokens, totalTokens, cachedTokens, runs, webSearchCount };
   }
 
+  /**
+   * 后台一次性 LLM 调用（人设复盘等）的用量入账：累加进 usage-today.json。
+   * **不加 runs** —— runs 只统计真实会话，复盘这类后台任务混进去会让
+   * "今日运行次数"与用户感知脱节。u 形状同 emptyUsage() 返回值（含 calls）。
+   */
+  addExternalUsage(u) {
+    const usage = u || {};
+    const promptTokens = Number(usage.promptTokens) || 0;
+    const completionTokens = Number(usage.completionTokens) || 0;
+    const totalTokens = Number(usage.totalTokens) || (promptTokens + completionTokens);
+    // 零消耗调用不入账（与 #bumpTodayUsage 的零消耗口径一致）
+    if (!totalTokens) return false;
+    this.#accumulateTodayUsage(localDayKey(Date.now()), {
+      promptTokens, completionTokens, totalTokens,
+      cachedTokens: Number(usage.cachedTokens) || 0,
+      runs: 0, webSearchCount: 0
+    });
+    return true;
+  }
+
+  /** usage-today.json 的共用读改写（原子写）。#bumpTodayUsage / addExternalUsage 共用。 */
+  #accumulateTodayUsage(dayKey, delta) {
+    let data = { dayKey, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, runs: 0, webSearchCount: 0 };
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'usage-today.json'), 'utf8'));
+      if (parsed?.dayKey === dayKey) data = parsed;
+    } catch { /* 新的一天 */ }
+    data.promptTokens += delta.promptTokens;
+    data.completionTokens += delta.completionTokens;
+    data.totalTokens += delta.totalTokens;
+    data.cachedTokens = (Number(data.cachedTokens) || 0) + (Number(delta.cachedTokens) || 0);
+    data.runs = (Number(data.runs) || 0) + (Number(delta.runs) || 0);
+    data.webSearchCount = (Number(data.webSearchCount) || 0) + (Number(delta.webSearchCount) || 0);
+    const tmp = path.join(DATA_DIR, 'usage-today.json.tmp');
+    fs.writeFileSync(tmp, JSON.stringify(data), 'utf8');
+    fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
+  }
+
   /** 在会话结束时累加今日用量。 */
   #bumpTodayUsage(s) {
     /* 零消耗会话（aborted 的等待会话：从未调用模型、token 全 0）不计 runs，
        否则"今日运行次数"会被暂停/未命中等中止事件虚增，与 LLM 调用次数脱节。 */
     if ((Number(s.usage?.calls) || 0) === 0 && (Number(s.usage?.totalTokens) || 0) === 0) return;
     const dayKey = localDayKey(s.startedAt);
-    let data = { dayKey, promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, runs: 0, webSearchCount: 0 };
-    try {
-      const parsed = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'usage-today.json'), 'utf8'));
-      if (parsed?.dayKey === dayKey) data = parsed;
-    } catch { /* 新的一天 */ }
-    data.promptTokens += s.usage.promptTokens;
-    data.completionTokens += s.usage.completionTokens;
-    data.totalTokens += s.usage.totalTokens;
-    data.cachedTokens = (data.cachedTokens || 0) + (Number(s.usage.cachedTokens) || 0);
-    data.runs += 1;
-    data.webSearchCount = (data.webSearchCount || 0) + (Number(s.webSearchCount) || 0);
-    const tmp = path.join(DATA_DIR, 'usage-today.json.tmp');
-    fs.writeFileSync(tmp, JSON.stringify(data), 'utf8');
-    fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
+    this.#accumulateTodayUsage(dayKey, {
+      promptTokens: s.usage.promptTokens,
+      completionTokens: s.usage.completionTokens,
+      totalTokens: s.usage.totalTokens,
+      cachedTokens: Number(s.usage.cachedTokens) || 0,
+      runs: 1,
+      webSearchCount: Number(s.webSearchCount) || 0
+    });
 
     // 累计总量（匿名遥测的唯一数据源：调用次数 + 三档 token 数，无任何身份信息）
     try {

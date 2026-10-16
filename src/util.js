@@ -143,6 +143,15 @@ export function normalizeMessageList(input) {
   return out;
 }
 
+/**
+ * 触发句/梗名查重的规范化口径：trim + 连续空白折成一个空格 + 转小写。
+ * 回复示例（routes.js）与群梗（persona-review.js）共用同一函数 ——
+ * 两处去重口径一旦漂移，「同名不同形」的东西就会同时生效，用户看到重复注入。
+ */
+export function normTrigger(s) {
+  return String(s ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 /** 简单串行队列：保证发送按顺序、带间隔执行。 */
 export function createSendChain() {
   let chain = Promise.resolve();

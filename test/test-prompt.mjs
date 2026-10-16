@@ -283,6 +283,32 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   cfg.persona.examples = [];
 }
 
+// ── 11. 群梗注入（doc/persona-meme-plan.md P2）──────────────────────────
+{
+  const { saveMemes } = await import('../src/group-memes.js');
+  // 测试数据目录下造 group-memes/123.json：2 条 active + 1 条 pending
+  saveMemes('group:123', [
+    { id: 'm1', name: '考试周特种兵', meaning: '考试周连续高强度复习的人', example: '你是特种兵吧', status: 'active', source: 'review', createdAt: 3 },
+    { id: 'm2', name: '华子', meaning: '中华香烟', status: 'active', source: 'review', createdAt: 2 },
+    { id: 'm3', name: '待审梗', meaning: 'pending 不许出现', status: 'pending', source: 'review', createdAt: 4 }
+  ]);
+  const build2 = (chatKey) => buildUserPrompt({
+    chatKey, kind: chatKey.split(':')[0], chatId: String(chatKey.split(':')[1] ?? ''),
+    chatName: '测试群', triggerEntries: [], store, memory,
+    stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],   // 非空保证【可用表情包】段在场，供位置断言
+    selfNickname: '测试机', runSeq: 31, moreUnreadDuringRun: false, proactive: false
+  });
+  const pg = build2('group:123');
+  assert.ok(pg.includes('【群内梗（本群黑话）】'), 'group 会话应出现群梗段');
+  assert.ok(pg.includes('- 考试周特种兵：考试周连续高强度复习的人（例：你是特种兵吧）'), 'active 群梗按「- 名字：含义（例：…）」渲染');
+  assert.ok(pg.includes('- 华子：中华香烟'), '无 example 的梗省略例句');
+  assert.ok(!pg.includes('待审梗'), 'pending 群梗不渲染');
+  const h11 = (m) => pg.indexOf(m);
+  assert.ok(h11('【群内梗（本群黑话）】') < h11('【可用表情包】'), '群梗段应在【可用表情包】之前（示例段之后的稳定区）');
+  assert.ok(!build2('group:456').includes('【群内梗'), '无群梗文件的群不应出现该段');
+  assert.ok(!build2('private:1').includes('【群内梗'), '私聊不应出现群梗段');
+}
+
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('✓ 提示词自测全部通过');

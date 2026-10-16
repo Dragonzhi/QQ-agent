@@ -293,6 +293,84 @@ c.section('3B. 回复示例库');
   });
 }
 
+// ── 3C. 群梗库 + 复盘（doc/persona-meme-plan.md P2）──────────────────
+c.section('3C. 群梗库 + 复盘');
+{
+  // 预置：直接往隔离数据目录写群梗文件（group-memes 是独立文件存储，不走 config）
+  const memesDir = path.join(ctx.dataDir, 'group-memes');
+  fs.mkdirSync(memesDir, { recursive: true });
+  const writeMemeFile = (memes) => fs.writeFileSync(path.join(memesDir, '777001.json'), JSON.stringify({ memes }), 'utf8');
+  writeMemeFile([
+    { id: 'gm_pre1', name: '预置梗', meaning: '预置含义', example: '预置例句', status: 'pending', source: 'review', createdAt: 111 }
+  ]);
+
+  await c.check('GET /api/persona/group-memes：返回预置文件内容', async () => {
+    const r = await hit('GET', '/api/persona/group-memes');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.ok, true);
+    const chat = (r.data.chats || []).find((x) => x.chatId === '777001');
+    assert.ok(chat, '预置群应出现');
+    assert.equal(chat.memes.length, 1);
+    assert.equal(chat.memes[0].name, '预置梗');
+  });
+
+  await c.check('PUT /api/persona/group-memes/:chatId/:memId：晋升 → active', async () => {
+    const r = await hit('PUT', '/api/persona/group-memes/777001/gm_pre1', { body: { status: 'active' } });
+    assert.equal(r.status, 200, `应 200，实际 ${r.status}：${JSON.stringify(r.data)}`);
+    assert.equal(r.data.meme.status, 'active');
+    const back = await hit('GET', '/api/persona/group-memes');
+    const chat = (back.data.chats || []).find((x) => x.chatId === '777001');
+    assert.equal(chat.memes.find((m) => m.id === 'gm_pre1').status, 'active', '晋升结果应落盘');
+  });
+
+  await c.check('PUT 群梗：同名晋升 409（规范化 name）、非法 status 400、非数字 chatId 400、不存在 404', async () => {
+    // 造第二条 name 仅差首尾空格的 pending（trim 后 normTrigger 同名）
+    writeMemeFile([
+      { id: 'gm_pre1', name: '预置梗', meaning: '预置含义', status: 'active', source: 'review', createdAt: 111 },
+      { id: 'gm_pre2', name: ' 预置梗 ', meaning: '规范化后同名', status: 'pending', source: 'review', createdAt: 112 }
+    ]);
+    const dup = await hit('PUT', '/api/persona/group-memes/777001/gm_pre2', { body: { status: 'active' } });
+    assert.equal(dup.status, 409, '同名晋升应 409');
+    assert.equal(dup.data.ok, false);
+    assert.match(String(dup.data.error || ''), /同名/);
+    const badStatus = await hit('PUT', '/api/persona/group-memes/777001/gm_pre2', { body: { status: 'published' } });
+    assert.equal(badStatus.status, 400, '非法 status 应 400');
+    const badChat = await hit('PUT', '/api/persona/group-memes/not_a_group/gm_pre2', { body: { status: 'active' } });
+    assert.equal(badChat.status, 400, '非数字 chatId 应 400（防路径穿越）');
+    const missing = await hit('PUT', '/api/persona/group-memes/777001/gm_nope', { body: { status: 'active' } });
+    assert.equal(missing.status, 404, '不存在的 memId 应 404');
+  });
+
+  await c.check('DELETE /api/persona/group-memes/:chatId/:memId：删除生效、再删 404', async () => {
+    const del = await hit('DELETE', '/api/persona/group-memes/777001/gm_pre2', { body: '{}' });
+    assert.equal(del.status, 200);
+    const back = await hit('GET', '/api/persona/group-memes');
+    const chat = (back.data.chats || []).find((x) => x.chatId === '777001');
+    assert.ok(!chat.memes.some((m) => m.id === 'gm_pre2'), '删除后不应再出现');
+    const gone = await hit('DELETE', '/api/persona/group-memes/777001/gm_pre2', { body: '{}' });
+    assert.equal(gone.status, 404, '再删应 404');
+  });
+
+  await c.check('POST /api/persona/review/run：无 LLM 时优雅降级（200 + 结构化 summary，错误进 errors）', async () => {
+    // 造一个 self 消息 ≥3 条的群保证有会话可扫（3B 里 group:456 只有 1 条 self，会被跳过）
+    app.store.appendIncoming('group:789', { mid: 8001, ts: Date.now() - 4000, senderId: '111', senderName: '张三', text: '复盘触发一' });
+    app.store.appendSelf('group:789', { text: '复盘样本回复一', ts: Date.now() - 3000 });
+    app.store.appendIncoming('group:789', { mid: 8002, ts: Date.now() - 2500, senderId: '113', senderName: '王五', text: '哈哈哈哈' });
+    app.store.appendSelf('group:789', { text: '复盘样本回复二', ts: Date.now() - 2000 });
+    app.store.appendSelf('group:789', { text: '复盘样本回复三', ts: Date.now() - 1000 });
+    const r = await hit('POST', '/api/persona/review/run', { body: '{}' });
+    assert.equal(r.status, 200, `应 200（runReviewOnce 绝不 throw），实际 ${r.status}`);
+    assert.equal(r.data.ok, true);
+    const s = r.data.summary || {};
+    assert.equal(typeof s.examplesDrafted, 'number', 'examplesDrafted 应是数字');
+    assert.equal(typeof s.memesDrafted, 'number', 'memesDrafted 应是数字');
+    assert.ok(s.chatsScanned >= 1, `预置样本群应被扫描到（实际 ${s.chatsScanned}）`);
+    assert.ok(Array.isArray(s.errors), 'errors 应是数组');
+    assert.ok(s.errors.length >= 1, '无 baseUrl 时 LLM 调用失败应进 errors 而不是炸服务');
+    assert.equal(s.examplesDrafted, 0, 'LLM 失败时不应起草示例');
+  });
+}
+
 // ── 4. Skill / 工具 ──────────────────────────────────────────────────────
 c.section('4. Skill / 工具');
 {

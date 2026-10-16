@@ -17,6 +17,7 @@ import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLID
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLIDER_BANDS as TIER_SLIDER_BANDS };
 import { formatFullTime, formatShortTime } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
+import { loadActiveMemes } from './group-memes.js';
 import { skillManager } from './skills/manager.js';
 
 // ── 系统提示 ─────────────────────────────────────────────────────────────
@@ -1045,6 +1046,31 @@ function renderExamples(cfg) {
 }
 
 /**
+ * 【群内梗】段（doc/persona-meme-plan.md P2）。
+ *
+ * 每个群自己的黑话/绰号/事件梗，per-chat 存 data/group-memes/<gid>.json，
+ * 每晚复盘收集、人工晋升后才 active。只注入当前会话对应群的梗（per-chat 隔离，
+ * A 群的梗绝不泄露给 B 群）；上限与"最近优先"在 loadActiveMemes 里做。
+ * 坏数据（缺名字或缺含义）逐条跳过，整段为空就不输出。
+ */
+function renderGroupMemes(memes) {
+  const list = (Array.isArray(memes) ? memes : [])
+    .map((m) => ({
+      name: String(m?.name ?? '').trim(),
+      meaning: String(m?.meaning ?? '').trim(),
+      example: String(m?.example ?? '').trim()
+    }))
+    .filter((m) => m.name && m.meaning);
+  if (!list.length) return '';
+  const lines = list.map((m) => `- ${m.name}：${m.meaning}${m.example ? `（例：${m.example}）` : ''}`);
+  return [
+    '【群内梗（本群黑话）】',
+    '下面是只在这个群里通行的内部梗，含义帮你理解；能用就自然地用，不确定就别硬用。',
+    ...lines
+  ].join('\n');
+}
+
+/**
  * 通话精简的 user prompt：
  *   人设（截断）→ 通话对方 → 刚才的对话 → 这一句 → 短提示 → 当前时间。
  * 任何字段缺失都不抛错（对方昵称拿不到 = "通话对方"，store 拿不到 = 没有历史）。
@@ -1202,6 +1228,13 @@ export function buildUserPrompt(ctx) {
   // 通话精简路径不走这里（buildCallUserPrompt 不调用 renderExamples）。
   const examplesSection = renderExamples(cfg);
   if (examplesSection) parts.push(examplesSection);
+
+  // 群梗（P2）：本群黑话，per-chat 存储，低频变更（审批时才动），与示例同属稳定段。
+  // 只对 group: 会话注入；私聊没有群梗。
+  if (String(ctx.chatKey || '').startsWith('group:')) {
+    const gm = renderGroupMemes(loadActiveMemes(ctx.chatKey));
+    if (gm) parts.push(gm);
+  }
 
   // 表情包（目录本身）。活跃度档位已并入系统提示的【表情包策略】段，这里不再重复引导。
   if (cfg.sticker?.enabled !== false) {

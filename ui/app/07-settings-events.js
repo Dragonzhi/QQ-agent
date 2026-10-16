@@ -33,15 +33,23 @@ function flushSettingsSaves() {
 // ── 回复示例库面板（doc/persona-meme-plan.md P1）────────────────────
 // 示例数据不经过 /api/config 的表单保存链，走专用端点；state.personaExamples
 // 只是渲染缓存。渲染与事件都收在这里（面板每次刷新整体重建，逐行重绑）。
+// P2 起面板还挂了「每晚复盘」设置块与「群内梗库」分区：复盘设置走显式保存按钮
+// 发 /api/config 补丁（面板在 stopPropagation 守卫内，自动保存链收不到这些输入）。
 const EXAMPLE_SOURCE_LABEL = { capture: '收藏', manual: '手动', review: '复盘' };
+const MEME_STATUS_LABEL = { active: '生效', pending: '待审', rejected: '驳回' };
 
 async function loadPersonaExamplesPanel() {
   const box = $('#persona-examples-panel');
   if (!box) return;
   try {
-    const r = await api('/api/persona/examples');
+    // 群梗接口失败不拖垮示例列表：单独 catch 成空
+    const [r, gm] = await Promise.all([
+      api('/api/persona/examples'),
+      api('/api/persona/group-memes').catch(() => ({ chats: [] }))
+    ]);
     state.personaExamples = Array.isArray(r.examples) ? r.examples : [];
     state.personaExamplesMaxActive = Number(r.maxActive) || 30;
+    state.personaGroupMemes = Array.isArray(gm.chats) ? gm.chats : [];
     renderPersonaExamplesPanel();
   } catch (e) {
     box.innerHTML = `<div class="hint">示例库加载失败：${esc(e.message)}</div>`;
@@ -78,9 +86,56 @@ function renderPersonaExamplesPanel() {
       ${rows.map((e) => row(e, isActive)).join('') || '<div class="hint">（空）</div>'}
     </div>`;
 
+  // ── 每晚复盘设置块（P2）：数字统一兜底渲染，非法配置不炸面板 ──
+  const rv = state.config?.persona?.review ?? {};
+  const rvNum = (v, def, lo, hi) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : def;
+  };
+  const rvHour = rvNum(rv.hour, 4, 0, 23);
+  const rvMaxDrafts = rvNum(rv.maxDrafts, 5, 1, 10);
+  const rvEnabled = rv.enabled === true;
+  const rvMemes = rv.groupMemes !== false;
+
+  // ── 群内梗库（P2）：per-chat 展示，行内晋升/撤回/删除 ──
+  const memeChats = (state.personaGroupMemes || []).filter((c) => Array.isArray(c.memes) && c.memes.length);
+  const memeRow = (m) => `
+    <div class="pe-row" data-meme-id="${esc(m.id)}">
+      <span class="pe-source" title="状态：${esc(m.status || '未知')}">${esc(MEME_STATUS_LABEL[m.status] || m.status || '未知')}</span>
+      <span class="pe-trigger" title="${esc(m.name)}">${esc(m.name)}</span>
+      <span class="pe-good" title="${esc(m.meaning)}">${esc(m.meaning)}${m.example ? `（例：${esc(m.example)}）` : ''}</span>
+      <span class="pe-actions">
+        ${m.status === 'active'
+          ? `<button type="button" class="btn btn-small pe-meme-status" data-status="pending" title="撤回：置回待审，提示词不再注入">撤回</button>`
+          : `<button type="button" class="btn btn-small btn-primary pe-meme-status" data-status="active" title="晋升：注入该群提示词的【群内梗】段（会查重，受上限约束）">晋升</button>`}
+        <button type="button" class="btn btn-small btn-danger pe-meme-del">删除</button>
+      </span>
+    </div>`;
+  const memeGroup = (chat) => `
+    <div class="pe-meme-chat" data-chat="${esc(chat.chatId)}">
+      <div class="pe-group-head">群 ${esc(chat.chatId)}<span class="muted">（${chat.memes.length} 条）</span></div>
+      ${chat.memes.map(memeRow).join('')}
+    </div>`;
+
   box.innerHTML = `
     <h3 style="margin-bottom:4px">回复示例库</h3>
     <div class="hint" style="margin-bottom:10px">生效 ${active.length}/${maxActive} · 待审 ${pending.length} 条 · 已驳回/淘汰 ${rejectedN} 条（不展示）。生效中的示例会渲染进提示词的【回复示例】段；存档页 hover 机器人发言可一键收藏。</div>
+    <div class="pe-group" id="pe-review-box">
+      <div class="pe-group-head">每晚复盘</div>
+      <div class="checkbox-row"><input type="checkbox" id="pe-review-enabled" ${rvEnabled ? 'checked' : ''} />
+        <label for="pe-review-enabled">启用每晚 LLM 复盘（自动起草候选示例 + 收集群内梗，全部进待审）</label></div>
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0">
+        <label class="hint" style="margin:0">触发小时(0-23) <input type="number" id="pe-review-hour" min="0" max="23" value="${rvHour}" style="width:64px" /></label>
+        <label class="hint" style="margin:0">每日起草上限(1-10) <input type="number" id="pe-review-maxdrafts" min="1" max="10" value="${rvMaxDrafts}" style="width:64px" /></label>
+        <span class="checkbox-row" style="margin:0"><input type="checkbox" id="pe-review-groupmemes" ${rvMemes ? 'checked' : ''} />
+          <label for="pe-review-groupmemes">收集群内梗</label></span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button type="button" class="btn btn-small btn-primary" id="pe-review-save">保存复盘设置</button>
+        <button type="button" class="btn btn-small" id="pe-review-run" title="手动跑一轮复盘（用当前存档里的今天消息，不必等到触发小时）">立即跑一次</button>
+        <span class="hint" id="pe-review-hint" style="margin:0"></span>
+      </div>
+    </div>
     <div class="field pe-add-form">
       <label>手动添加（保存为待审）</label>
       <input type="text" id="pe-add-trigger" placeholder="触发句：群友会说什么（不带昵称）" />
@@ -92,7 +147,12 @@ function renderPersonaExamplesPanel() {
       </div>
     </div>
     ${group('生效中', active, true)}
-    ${group('待审', pending, false)}`;
+    ${group('待审', pending, false)}
+    <div class="pe-group" id="pe-memes-box">
+      <div class="pe-group-head">群内梗库</div>
+      <div class="hint" style="margin-bottom:6px">每群独立的黑话/绰号/事件梗库：生效中的会注入对应群提示词的【群内梗】段。由每晚复盘自动收集，晋升后才生效；查重与上限（20 条/群）同示例库。</div>
+      ${memeChats.map(memeGroup).join('') || '<div class="hint">（还没有任何群梗：启用复盘跑过一轮后，这里会出现各群的候选梗）</div>'}
+    </div>`;
 
   // 面板输入不进设置表单的自动保存链：这些字段落的是示例专用端点，
   // 冒泡到 #settings-form 只会触发一次无意义的全量 config 保存（还会挂黄条）。
@@ -102,6 +162,54 @@ function renderPersonaExamplesPanel() {
     box.addEventListener('input', (e) => e.stopPropagation());
     box.addEventListener('change', (e) => e.stopPropagation());
   }
+
+  // ── 复盘设置：显式保存（守卫容器内的输入不会走自动保存链，必须自己发补丁）──
+  $('#pe-review-save')?.addEventListener('click', async () => {
+    const hint = $('#pe-review-hint');
+    const hour = rvNum($('#pe-review-hour')?.value, 4, 0, 23);
+    const maxDrafts = rvNum($('#pe-review-maxdrafts')?.value, 5, 1, 10);
+    const patch = {
+      persona: {
+        review: {
+          enabled: $('#pe-review-enabled')?.checked === true,
+          hour,
+          maxDrafts,
+          groupMemes: $('#pe-review-groupmemes')?.checked !== false
+        }
+      }
+    };
+    try {
+      const r = await api('/api/config', { method: 'POST', body: JSON.stringify(patch) });
+      // 响应里的 config 已是服务端深合并后的全量：同步缓存，避免下次整表保存把复盘设置回滚
+      if (r && r.config) state.config = r.config;
+      // 把兜底后的值写回输入框（用户填了越界数字时有即时纠正的视觉反馈）
+      const hi = $('#pe-review-hour'); if (hi) hi.value = String(hour);
+      const mi = $('#pe-review-maxdrafts'); if (mi) mi.value = String(maxDrafts);
+      if (hint) hint.textContent = '已保存 ✓';
+    } catch (e) {
+      if (hint) hint.textContent = `保存失败：${e.message}`;
+    }
+  });
+
+  // 立即跑一次：runReviewOnce 绝不 throw，服务端恒 200，成败明细在 summary 里
+  $('#pe-review-run')?.addEventListener('click', async () => {
+    const hint = $('#pe-review-hint');
+    const btn = $('#pe-review-run');
+    if (btn) btn.disabled = true;
+    if (hint) hint.textContent = '复盘运行中…（通常几秒到几十秒）';
+    try {
+      const r = await api('/api/persona/review/run', { method: 'POST', body: '{}' });
+      const s = r.summary || {};
+      const errN = (s.errors || []).length;
+      alert(`复盘完成：起草示例 ${s.examplesDrafted ?? 0} 条，收集群梗 ${s.memesDrafted ?? 0} 条，扫描会话 ${s.chatsScanned ?? 0} 个`
+        + (errN ? `\n有 ${errN} 个错误（多为模型未配置/网络问题），详见服务端日志。` : ''));
+      await loadPersonaExamplesPanel();   // 待审区可能出现新条目，重拉
+    } catch (e) {
+      if (hint) hint.textContent = `运行失败：${e.message}`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
 
   // 手动添加：成功后重拉面板（表单随重渲染清空），提示补绘在新的 hint 上
   $('#pe-add-btn')?.addEventListener('click', async () => {
@@ -152,6 +260,38 @@ function renderPersonaExamplesPanel() {
       } catch (e) {
         alert(`删除失败：${e.message}`);
       }
+    });
+  });
+
+  // 群内梗行内操作（P2）：晋升/撤回、删除。按群分组遍历，chatId 从分组容器取。
+  box.querySelectorAll('.pe-meme-chat').forEach((chatEl) => {
+    const chatId = chatEl.dataset.chat;
+    chatEl.querySelectorAll('.pe-row').forEach((rowEl) => {
+      const memId = rowEl.dataset.memeId;
+      rowEl.querySelector('.pe-meme-status')?.addEventListener('click', async (e) => {
+        const status = e.currentTarget.dataset.status;
+        e.currentTarget.disabled = true;
+        try {
+          await api(`/api/persona/group-memes/${chatId}/${encodeURIComponent(memId)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status })
+          });
+          await loadPersonaExamplesPanel();
+        } catch (err) {
+          e.currentTarget.disabled = false;
+          // 409 同名查重等后端原因直接亮给用户（api() 已把 error 文本带回来）
+          alert(err.message);
+        }
+      });
+      rowEl.querySelector('.pe-meme-del')?.addEventListener('click', async () => {
+        if (!(await uiConfirm('确定删除这条群梗？删除后不可恢复（只是撤回请用「撤回」按钮）。'))) return;
+        try {
+          await api(`/api/persona/group-memes/${chatId}/${encodeURIComponent(memId)}`, { method: 'DELETE', body: '{}' });
+          await loadPersonaExamplesPanel();
+        } catch (e) {
+          alert(`删除失败：${e.message}`);
+        }
+      });
     });
   });
 }

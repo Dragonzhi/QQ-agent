@@ -22,6 +22,7 @@ import { cacheHitRate } from './llm.js';
 import { isPeakHour, priceAt, resolveModelPrice, modelLabel, splitModelLabel, UNKNOWN_VENDOR } from './model-prices.js';
 import { initPriceFeed } from './price-feed.js';
 import { startTelemetryLoop } from './telemetry.js';
+import { startPersonaReviewLoop } from './persona-review.js';
 import { loadPlugins, watchPlugins } from './plugin-loader.js';
 import { skillManager } from './skills/manager.js';
 import { extractCandidateUrls, dispatchMediaLinks } from './media-links.js';
@@ -1610,6 +1611,10 @@ export function createApp({ log = console.log } = {}) {
 
     // 匿名用量遥测：启动 90 秒后发第一次，之后每 6 小时一次；失败静默不影响使用
     startTelemetryLoop(log);
+
+    // 每晚人设复盘（doc/persona-meme-plan.md P2）：分钟级对表，到 review.hour
+    // 跑一轮（未启用时空转）。内部自兜错，绝不影响主流程。
+    startPersonaReviewLoop({ log, store, sessions });
 
     // 会话索引后台对账：启动读的是毫秒级缓存，这里异步补扫磁盘修正差异
     // （缓存缺失的新文件/外部删除的文件）。不 await —— 不挡任何启动步骤。

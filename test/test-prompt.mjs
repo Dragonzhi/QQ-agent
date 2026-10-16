@@ -309,6 +309,15 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(!build2('private:1').includes('【群内梗'), '私聊不应出现群梗段');
 }
 
+// ── 12. 接话要有内容（核心规则：空转短句禁令，配合话题热身卡）────────────
+{
+  const sys12 = buildSystemPrompt();
+  assert.ok(sys12.includes('【接话要有内容】'), '核心规则应包含「接话要有内容」段');
+  assert.ok(sys12.includes('不许当独立回复'), '无具体词的空转短句禁令应在场');
+  assert.ok(sys12.includes('「确实」「哦」「受着」'), '空转短句黑名单应在场');
+  assert.ok(sys12.includes('别硬答、别装懂'), '接不上时的兜底指引应在场');
+}
+
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('✓ 提示词自测全部通过');

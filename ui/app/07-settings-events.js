@@ -202,7 +202,7 @@ function renderPersonaExamplesPanel() {
       const s = r.summary || {};
       const errN = (s.errors || []).length;
       alert(`复盘完成：起草示例 ${s.examplesDrafted ?? 0} 条，收集群梗 ${s.memesDrafted ?? 0} 条，扫描会话 ${s.chatsScanned ?? 0} 个`
-        + (errN ? `\n有 ${errN} 个错误（多为模型未配置/网络问题），详见服务端日志。` : ''));
+        + (errN ? `\n有 ${errN} 个错误，详见服务端日志。` : ''));
       await loadPersonaExamplesPanel();   // 待审区可能出现新条目，重拉
     } catch (e) {
       if (hint) hint.textContent = `运行失败：${e.message}`;

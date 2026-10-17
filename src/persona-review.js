@@ -59,6 +59,13 @@ function parseLooseJson(text) {
   return null;
 }
 
+/**
+ * 取模型正文。chatCompletion 返回的是扁平结构 { message, usage, raw, … }，
+ * **不是** OpenAI 原始响应的 { choices:[…] } —— 照抄原始 API 形状会永远取到 undefined，
+ * 表现为「模型输出不是可解析的 JSON」把每次复盘都丢掉（src 里 call-memory.js 同口径）。
+ */
+const replyText = (resp) => String(resp?.message?.content ?? '');
+
 /** 一次复盘 LLM 调用的用量入账（calls 计 1，runs 不动）。记账失败不影响复盘。 */
 function recordUsage(resp, sessions) {
   try {
@@ -230,7 +237,7 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
         maxTokens: 2000     // 防思考型模型把预算全花在 reasoning 上
       });
       recordUsage(resp, sessions);
-      const parsed = parseLooseJson(resp?.choices?.[0]?.message?.content);
+      const parsed = parseLooseJson(replyText(resp));
       if (!parsed) {
         note('起草示例', new Error('模型输出不是可解析的 JSON，已丢弃'));
       } else {
@@ -271,7 +278,7 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
             maxTokens: 1500
           });
           recordUsage(resp, sessions);
-          const parsed = parseLooseJson(resp?.choices?.[0]?.message?.content);
+          const parsed = parseLooseJson(replyText(resp));
           if (!parsed) {
             note(`群 ${g.chatId} 群梗收集`, new Error('模型输出不是可解析的 JSON，已丢弃'));
             continue;

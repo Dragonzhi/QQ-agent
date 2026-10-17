@@ -108,6 +108,7 @@ function renderPersonaExamplesPanel() {
         ${m.status === 'active'
           ? `<button type="button" class="btn btn-small pe-meme-status" data-status="pending" title="撤回：置回待审，提示词不再注入">撤回</button>`
           : `<button type="button" class="btn btn-small btn-primary pe-meme-status" data-status="active" title="晋升：注入该群提示词的【群内梗】段（会查重，受上限约束）">晋升</button>`}
+        <button type="button" class="btn btn-small pe-meme-edit" title="编辑梗名/含义/例句（不改变状态）">编辑</button>
         <button type="button" class="btn btn-small btn-danger pe-meme-del">删除</button>
       </span>
     </div>`;
@@ -282,6 +283,12 @@ function renderPersonaExamplesPanel() {
           // 409 同名查重等后端原因直接亮给用户（api() 已把 error 文本带回来）
           alert(err.message);
         }
+      });
+      rowEl.querySelector('.pe-meme-edit')?.addEventListener('click', () => {
+        // meme 数据从渲染缓存里找（面板刚渲染完，缓存必新鲜）；chatId 以分组容器为准
+        const chat = (state.personaGroupMemes || []).find((c) => String(c.chatId) === String(chatId));
+        const meme = (chat?.memes || []).find((x) => x && x.id === memId);
+        if (meme) openGroupMemeModal({ meme, chatId, onSaved: loadPersonaExamplesPanel });
       });
       rowEl.querySelector('.pe-meme-del')?.addEventListener('click', async () => {
         if (!(await uiConfirm('确定删除这条群梗？删除后不可恢复（只是撤回请用「撤回」按钮）。'))) return;

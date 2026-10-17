@@ -341,6 +341,21 @@ c.section('3C. 群梗库 + 复盘');
     assert.equal(missing.status, 404, '不存在的 memId 应 404');
   });
 
+  await c.check('PUT 群梗：编辑 name/meaning/example（不带 status，状态保持不变）', async () => {
+    const r = await hit('PUT', '/api/persona/group-memes/777001/gm_pre1', {
+      body: { name: '新梗名', meaning: '新含义', example: '新例句' }
+    });
+    assert.equal(r.status, 200, `应 200，实际 ${r.status}：${JSON.stringify(r.data)}`);
+    assert.equal(r.data.meme.name, '新梗名');
+    assert.equal(r.data.meme.status, 'active', '编辑不得改变状态');
+    const back = await hit('GET', '/api/persona/group-memes');
+    const m = (back.data.chats || []).find((x) => x.chatId === '777001').memes.find((x) => x.id === 'gm_pre1');
+    assert.equal(m.meaning, '新含义', '编辑结果应落盘');
+    assert.equal(m.example, '新例句');
+    const emptyName = await hit('PUT', '/api/persona/group-memes/777001/gm_pre1', { body: { name: '  ' } });
+    assert.equal(emptyName.status, 400, '空梗名应 400');
+  });
+
   await c.check('DELETE /api/persona/group-memes/:chatId/:memId：删除生效、再删 404', async () => {
     const del = await hit('DELETE', '/api/persona/group-memes/777001/gm_pre2', { body: '{}' });
     assert.equal(del.status, 200);

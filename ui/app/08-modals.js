@@ -316,6 +316,53 @@ function openPersonaExampleModal({ example = null, entry = null, before = [], on
 }
 
 /**
+ * 「编辑群梗」模态框：设置页群内梗库的「编辑」按钮入口。
+ * 保存 = PUT /api/persona/group-memes/:chatId/:memId（不传 status，保持原状态）；
+ * 晋升/撤回不在弹窗里做 —— 与示例库同一口径，审批统一收在面板行内按钮。
+ */
+function openGroupMemeModal({ meme = null, chatId = '', onSaved = null } = {}) {
+  const m = meme || {};
+  const overlay = modelModalShell({
+    head: `编辑群梗 · 群 ${chatId}`,
+    body: `
+      <div class="field"><label>梗名</label>
+        <input type="text" id="gm-name" value="${esc(m.name || '')}" placeholder="群内黑话/绰号/事件名" /></div>
+      <div class="field"><label>含义解释</label>
+        <textarea id="gm-meaning" style="min-height:56px" placeholder="这个梗指什么、怎么来的">${esc(m.meaning || '')}</textarea></div>
+      <div class="field"><label>群内用法原话（可选）</label>
+        <input type="text" id="gm-example" value="${esc(m.example || '')}" placeholder="群里实际用这个梗的一句话" /></div>
+      <div class="hint" id="gm-hint">保存不改变状态：待审仍是待审，生效的继续生效。</div>`,
+    foot: `<button class="btn" id="gm-cancel">取消</button>
+           <button class="btn btn-primary" id="gm-save">保存</button>`
+  });
+  overlay.querySelector('#gm-cancel').addEventListener('click', () => closeModelModal(overlay));
+  overlay.querySelector('#gm-save').addEventListener('click', async () => {
+    const hint = overlay.querySelector('#gm-hint');
+    const name = overlay.querySelector('#gm-name').value.trim();
+    const meaning = overlay.querySelector('#gm-meaning').value.trim();
+    const example = overlay.querySelector('#gm-example').value.trim();
+    if (!name) { if (hint) hint.textContent = '梗名不能为空'; return; }
+    if (!meaning) { if (hint) hint.textContent = '含义不能为空'; return; }
+    if (!m.id) { if (hint) hint.textContent = '缺少梗 id，请刷新面板重试'; return; }
+    const btn = overlay.querySelector('#gm-save');
+    btn.disabled = true;
+    try {
+      await api(`/api/persona/group-memes/${encodeURIComponent(chatId)}/${encodeURIComponent(m.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name, meaning, example })
+      });
+      if (hint) hint.textContent = '已保存 ✓';
+      // 留 1.4s 让用户读完提示再关；期间窗口已不可再点（按钮 disabled）
+      setTimeout(() => closeModelModal(overlay), 1400);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (e) {
+      btn.disabled = false;
+      if (hint) hint.textContent = `保存失败：${e.message}`;
+    }
+  });
+}
+
+/**
  * 「模型配置」模态框（2026-09-18 改版）：收纳原页面的
  * 模型目录 / Base URL / API Key / 图片视频专用模型 / 图片视频开关 / 视频理解方式。
  * 保存按钮 = 把这些字段 PATCH 到 /api/config（掩码 Key 不回传，与主页面同语义）。

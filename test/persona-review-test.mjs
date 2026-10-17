@@ -55,13 +55,22 @@ const runWith = (llmCall) => runReviewOnce({ store: fakeStore(CHATS), now: NOW, 
 // ── ① 正常返回 ──────────────────────────────────────────────────────────
 t.section('① 扁平结构 message.content → 解析成功');
 await t.check('起草示例落进 config.persona.examples（source=review、status=pending）', async () => {
-  const r = await runWith(llmByTask({
+  const seen = [];
+  const inner = llmByTask({
     examples: JSON.stringify({ examples: [{ trigger: '锄大地锄吐了', good: ['受着'], bad: ['确实'], tags: ['吐槽'] }] }),
     memes: JSON.stringify({ memes: [] })
-  }));
+  });
+  const r = await runReviewOnce({
+    store: fakeStore(CHATS),
+    now: NOW,
+    llmCall: async (args) => { seen.push(args); return inner(args); }
+  });
   assert.deepStrictEqual(r.errors, [], '不应有任何错误');
   assert.strictEqual(r.examplesDrafted, 1);
   assert.strictEqual(r.chatsScanned, 1);
+  // 回归守卫：思考型端点的 reasoning 会先吃掉数千 token，输出预算给小了正文会被截成空串
+  // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」（2026-10-17 线上故障）。
+  assert.ok(seen[0].maxTokens >= 6000, `复盘调用必须留足输出预算，实测 ${seen[0].maxTokens}`);
   const saved = (getConfig().persona?.examples || []).filter((e) => e.source === 'review');
   assert.strictEqual(saved.length, 1, '应写入 1 条 review 来源示例');
   assert.strictEqual(saved[0].status, 'pending', '只进待审区，不直接生效');

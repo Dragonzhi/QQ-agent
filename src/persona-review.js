@@ -234,12 +234,15 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
           }
         ],
         temperature: 0.4,   // 结构化整理任务，不需要发散
-        maxTokens: 2000     // 防思考型模型把预算全花在 reasoning 上
+        // 思考型端点（如 step_plan）的 reasoning 会先吃掉 3~5k token：预算给小了正文直接被截成空串
+        // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」。
+        // 实测该提示词 reasoning≈7k 字 + 正文≈650 字，8000 才稳定 stop。
+        maxTokens: 8000
       });
       recordUsage(resp, sessions);
       const parsed = parseLooseJson(replyText(resp));
       if (!parsed) {
-        note('起草示例', new Error('模型输出不是可解析的 JSON，已丢弃'));
+        note('起草示例', new Error(`模型输出不是可解析的 JSON，已丢弃（finishReason=${resp?.finishReason || '?'}、正文 ${replyText(resp).length} 字）`));
       } else {
         const drafts = validateDraftedExamples(parsed.examples, getConfig().persona?.examples, maxDrafts, now);
         // 与 P1 同一条 updateConfig 路径：读全量 → 追加 → 整体替换
@@ -275,12 +278,12 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
               }
             ],
             temperature: 0.4,
-            maxTokens: 1500
+            maxTokens: 8000   // 同上：思考端点的 reasoning 开销远大于正文，给小了正文为空
           });
           recordUsage(resp, sessions);
           const parsed = parseLooseJson(replyText(resp));
           if (!parsed) {
-            note(`群 ${g.chatId} 群梗收集`, new Error('模型输出不是可解析的 JSON，已丢弃'));
+            note(`群 ${g.chatId} 群梗收集`, new Error(`模型输出不是可解析的 JSON，已丢弃（finishReason=${resp?.finishReason || '?'}、正文 ${replyText(resp).length} 字）`));
             continue;
           }
           const { memes: existing } = loadMemes(g.chatKey);

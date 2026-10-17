@@ -196,7 +196,7 @@ function renderPersonaExamplesPanel() {
     const hint = $('#pe-review-hint');
     const btn = $('#pe-review-run');
     if (btn) btn.disabled = true;
-    if (hint) hint.textContent = '复盘运行中…（通常几秒到几十秒）';
+    if (hint) hint.textContent = '复盘运行中…（含模型思考，通常 1~4 分钟）';
     try {
       const r = await api('/api/persona/review/run', { method: 'POST', body: '{}' });
       const s = r.summary || {};

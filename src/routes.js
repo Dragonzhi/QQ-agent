@@ -428,6 +428,8 @@ export function createRoutes(deps) {
             usedAt: 0
           };
           updateConfig({ persona: { examples: [...examplesOf(), entry] } });
+          // 审计：示例库此前增删无日志，条目丢了无法取证（2026-10-17 实际发生过）
+          logger.info('示例库', `收进人设 ${entry.id}「${String(trigger).slice(0, 40)}」`);
           // entry/before 原样带回：弹窗要把当时的对话当只读上下文展示
           return json(res, 200, { ok: true, draft: entry, entry: slice.target, before: slice.before });
         } catch (error) {
@@ -470,6 +472,7 @@ export function createRoutes(deps) {
             usedAt: 0
           };
           updateConfig({ persona: { examples: [...examplesOf(), entry] } });
+          logger.info('示例库', `手动添加 ${entry.id}「${trigger.slice(0, 40)}」`);
           return json(res, 200, { ok: true, example: entry });
         } catch (error) {
           return json(res, 500, { ok: false, error: String(error?.message ?? error) });
@@ -533,6 +536,7 @@ export function createRoutes(deps) {
             }
           }
           updateConfig({ persona: { examples: nextList } });
+          logger.info('示例库', `编辑/晋升 ${id}「${String(next.trigger).slice(0, 40)}」 ${cur.status}→${status}`);
           return json(res, 200, { ok: true, example: next });
         } catch (error) {
           return json(res, 500, { ok: false, error: String(error?.message ?? error) });
@@ -546,6 +550,9 @@ export function createRoutes(deps) {
         const list = examplesOf();
         const next = list.filter((e) => e && e.id !== id);
         if (next.length === list.length) return json(res, 404, { ok: false, error: '找不到这条示例' });
+        // 删除是不可逆操作：完整内容落日志，事后可从日志恢复
+        const removed = list.find((e) => e && e.id === id);
+        logger.info('示例库', `删除 ${id}（内容留档）：`, JSON.stringify(removed));
         updateConfig({ persona: { examples: next } });
         return json(res, 200, { ok: true });
       }

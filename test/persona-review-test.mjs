@@ -69,8 +69,10 @@ await t.check('起草示例落进 config.persona.examples（source=review、stat
   assert.strictEqual(r.examplesDrafted, 1);
   assert.strictEqual(r.chatsScanned, 1);
   // 回归守卫：思考型端点的 reasoning 会先吃掉数千 token，输出预算给小了正文会被截成空串
-  // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」（2026-10-17 线上故障）。
-  assert.ok(seen[0].maxTokens >= 6000, `复盘调用必须留足输出预算，实测 ${seen[0].maxTokens}`);
+  // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」（2026-10-17 线上故障，
+  // 起草与群梗两路先后在 2000/8000 预算上翻车，群梗通读 4000 字群聊时思考量更大）。
+  assert.ok(seen[0].maxTokens >= 10000, `起草调用必须留足输出预算，实测 ${seen[0].maxTokens}`);
+  assert.ok(seen[1]?.maxTokens >= 10000, `群梗调用必须留足输出预算，实测 ${seen[1]?.maxTokens}`);
   const saved = (getConfig().persona?.examples || []).filter((e) => e.source === 'review');
   assert.strictEqual(saved.length, 1, '应写入 1 条 review 来源示例');
   assert.strictEqual(saved[0].status, 'pending', '只进待审区，不直接生效');

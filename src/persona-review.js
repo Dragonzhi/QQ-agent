@@ -236,8 +236,9 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
         temperature: 0.4,   // 结构化整理任务，不需要发散
         // 思考型端点（如 step_plan）的 reasoning 会先吃掉 3~5k token：预算给小了正文直接被截成空串
         // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」。
-        // 实测该提示词 reasoning≈7k 字 + 正文≈650 字，8000 才稳定 stop。
-        maxTokens: 8000
+        // 实测 reasoning≈7k 字 + 正文≈650 字 ≈ 8000 顶格 —— 8000 已无余量，提 12000。
+        // maxTokens 只是上限：finishReason=stop 时按实际用量计费，提上限不增加成本。
+        maxTokens: 12000
       });
       recordUsage(resp, sessions);
       const parsed = parseLooseJson(replyText(resp));
@@ -278,7 +279,9 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
               }
             ],
             temperature: 0.4,
-            maxTokens: 8000   // 同上：思考端点的 reasoning 开销远大于正文，给小了正文为空
+            // 同上，但这个任务更吃预算：通读 4000 字密集群聊找梗，思考量比起草示例大。
+            // 2026-10-17 实测：活跃大群 8000 预算下 reasoning 吃穿预算、正文 0 字。
+            maxTokens: 12000
           });
           recordUsage(resp, sessions);
           const parsed = parseLooseJson(replyText(resp));

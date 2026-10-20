@@ -1832,3 +1832,51 @@ details.collapsible.coll-shut > summary::after { transform: rotate(0deg); }
 .pe-row .pe-actions { display: flex; gap: 4px; flex-shrink: 0; }
 /* 设置页「群内梗库」分区（P2）：按群分组的行复用 pe-row，只补分组间距 */
 .pe-meme-chat { margin-bottom: 10px; }
+
+/* ── 游戏页签（AI 玩游戏的实时实况，页面游戏无关） ── */
+.game-head { max-width: 1100px; margin: 0 auto 16px; }
+.game-title-row { display: flex; align-items: center; gap: 10px; }
+.game-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.game-dot.on { background: var(--green, #3ba55d); box-shadow: 0 0 6px var(--green, #3ba55d); }
+.game-dot.off { background: var(--faint, #999); }
+.game-title { font-size: 17px; font-weight: 650; }
+.game-phase { font-size: 12px; color: var(--muted); }
+.game-spacer { flex: 1; }
+.game-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.game-stat { background: var(--bg1, rgba(127,127,127,.08)); border: 1px solid var(--bd); border-radius: 8px; padding: 5px 10px; font-size: 12px; color: var(--muted); }
+.game-stat b { color: var(--tx); margin-right: 5px; font-size: 13px; }
+.game-grid { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.game-card { background: var(--bg1, rgba(127,127,127,.06)); border: 1px solid var(--bd); border-radius: 12px; padding: 14px 16px; min-height: 180px; }
+.game-card-title { font-size: 13px; font-weight: 650; color: var(--muted); margin-bottom: 10px; }
+.game-vitals { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.game-vital { display: flex; justify-content: space-between; font-size: 13px; gap: 8px; }
+.game-vital span { color: var(--muted); flex: none; }
+.game-vital b { text-align: right; word-break: break-all; }
+.game-feed { display: flex; flex-direction: column; gap: 7px; max-height: 300px; overflow-y: auto; }
+.game-item { font-size: 13px; display: flex; gap: 8px; align-items: baseline; }
+.game-item-t { color: var(--faint); font-size: 11px; flex: none; min-width: 38px; }
+.game-item-d { color: var(--muted); font-size: 12px; }
+.game-empty { color: var(--faint); font-size: 13px; padding: 18px 0; text-align: center; }
+.game-err { max-width: 1100px; margin: 12px auto 0; color: var(--err, #d33); font-size: 12px; }
+
+/* 游戏页·模型视角 */
+.game-detail-card { max-width: 1100px; margin: 14px auto 0; }
+.game-detail-head { display: flex; gap: 12px; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; }
+.game-round { font-weight: 650; font-size: 14px; }
+.game-dur, .game-tok { font-size: 12px; color: var(--muted); background: var(--bg1, rgba(127,127,127,.08)); border-radius: 6px; padding: 2px 8px; }
+.game-sec { margin: 6px 0; border: 1px solid var(--bd); border-radius: 8px; }
+.game-sec summary { cursor: pointer; padding: 7px 12px; font-size: 12px; color: var(--muted); user-select: none; }
+.game-sec summary:hover { color: var(--tx); }
+.game-sec pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--bd); font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; color: var(--text); }
+.game-chain { margin-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.game-step { font-size: 13px; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.game-step b { color: var(--accent); min-width: 44px; }
+.game-step-args { color: var(--muted); font-size: 12px; }
+.game-step-res { color: var(--green, #3ba55d); font-size: 12px; }
+.game-item-btn { cursor: pointer; border-radius: 6px; padding: 2px 4px; }
+.game-item-btn:hover { background: var(--hover, rgba(127,127,127,.12)); }
+.game-item-btn.sel { background: var(--ac-soft, rgba(88,101,242,.15)); }
+
+/* 游戏页·它想（think 气泡）*/
+.game-think { background: var(--ac-soft, rgba(88,101,242,.12)); border-left: 3px solid var(--accent, #5865f2); border-radius: 6px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.5; }
+.game-think b { color: var(--accent, #5865f2); margin-right: 6px; }

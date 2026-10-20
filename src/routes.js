@@ -100,6 +100,38 @@ export function createRoutes(deps) {
     .map((s) => String(s ?? '').trim()).filter(Boolean);
 
   return [
+    // ── 游戏页签（游戏无关：哪个技能提供 game.state/game.control 就用哪个）──
+    {
+      method: 'GET', pattern: '/api/game/state',
+      handler: async ({ res, json }) => {
+        for (const p of skillManager.getCapabilityProviders('game.state', {})) {
+          try {
+            const data = await p.fn({});
+            return json(res, 200, data || { ok: false, error: 'no-data' });
+          } catch (error) {
+            return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        return json(res, 200, { ok: true, active: false, phase: 'offline', game: '', title: '' });
+      }
+    },
+    {
+      method: 'POST', pattern: '/api/game/control',
+      handler: async ({ req, res, json }) => {
+        const body = await readBody(req);
+        const action = String(body?.action || '');
+        if (!action) return json(res, 400, { error: '缺少 action' });
+        for (const p of skillManager.getCapabilityProviders('game.control', {})) {
+          try {
+            const data = await p.fn({ action });
+            return json(res, data?.ok === false ? 400 : 200, data || { ok: false, error: 'no-data' });
+          } catch (error) {
+            return json(res, 500, { ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        return json(res, 200, { ok: false, error: '没有提供游戏控制的技能（去设置里启用「MC 玩家」）' });
+      }
+    },
     // ── 状态 / 数据目录 / 重置 ─────────────────────────────────────────
     {
       method: 'GET', pattern: '/api/status',

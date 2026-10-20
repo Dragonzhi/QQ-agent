@@ -36,6 +36,7 @@ $$('.tab').forEach((tab) => {
       if (!ready) {
         switchTab('settings');
         connectSSE();
+    if (typeof startGamePoller === 'function') startGamePoller();
         refreshStatus();
         startStatusPoller();
         return;
@@ -44,6 +45,7 @@ $$('.tab').forEach((tab) => {
     refreshStatus();
     startStatusPoller();
     connectSSE();
+    if (typeof startGamePoller === 'function') startGamePoller();
     loadSessions();
     loadMemoryView();
     initSessionScrollLoader();

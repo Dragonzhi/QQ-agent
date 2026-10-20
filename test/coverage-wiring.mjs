@@ -153,12 +153,12 @@ const cov = {};
 cov['首屏'] = scan('首屏');
 
 // ── 1) 逐个页签（点真实按钮）────────────────────────────────────────────
-// 注意：8 个 view 都是 index.html 里的静态节点，切页签不会新建元素
+// 注意：各 view 都是 index.html 里的静态节点，切页签不会新建元素
 //（它们在首屏那轮就已全部扫到）。所以这里统计"访问过的页签数"，而不是新增元素数。
 // ⚠️ 这份列表必须与 index.html 里的 .tab 保持一致 —— 漏掉一个页签，
 // 那一页的按钮就永远不会被接线检查覆盖（skills/plugins 曾经就是这样被漏掉的）。
 const visitedTabs = [];
-for (const t of ['sessions', 'chats', 'memory', 'usage', 'skills', 'plugins', 'snowluma', 'settings']) {
+for (const t of ['sessions', 'chats', 'memory', 'usage', 'game', 'skills', 'plugins', 'snowluma', 'settings']) {
   const tabBtn = window.document.querySelector(`.tab[data-tab="${t}"]`);
   if (tabBtn) tabBtn.click(); else { try { window.switchTab(t); } catch { /* ignore */ } }
   await sleep(800);

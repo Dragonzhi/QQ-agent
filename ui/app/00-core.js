@@ -796,6 +796,13 @@ function switchTab(name) {
   }
   if (name === 'memory') loadMemoryView();
   if (name === 'usage') loadUsageView({ force: true });
+  if (name === 'game') {
+    loadGameView();
+    // 进来就开轮询：离开时关掉，不重启的话离开再回来永久冻结（只好刷页）
+    if (typeof startGamePoller === 'function') startGamePoller();
+  }
+  // 离开游戏页就停它的轮询（其它页签各自管理，游戏页 3s 一拉不能一直空转）
+  if (name !== 'game' && typeof stopGamePoller === 'function') stopGamePoller();
   if (name === 'skills') loadModulePage('skill');
   if (name === 'plugins') loadModulePage('plugin');
   if (name === 'snowluma') loadSnowlumaPage();

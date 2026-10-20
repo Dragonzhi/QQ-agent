@@ -654,6 +654,50 @@ export function createApp({ log = console.log } = {}) {
   const store = new ChatStore(cfg.store?.maxMessagesPerChat ?? 0);   // 0 = 不限
   const memory = new MemoryStore();
   const sessions = new SessionRegistry(cfg.store?.keepSessionFiles ?? 0);   // 0 = 不限
+
+// ── MC 游戏会话接入（skills/minecraft 消费）───────────────────────────
+// 游戏循环活在独立 runner 进程里，本身不进 orchestrator 的会话体系。
+// 这里把「建/记/收」三个动作作为能力暴露给技能，让游戏会话能出现在
+// 控制台「存档」页（实时活动状态）+ 「用量」页（addExternalUsage 外部计费）。
+// 技能侧只发意图，不直接碰 SessionRegistry 实例。
+try {
+  skillManager.provide('mc.session', 'core', (args) => {
+    const a = args || {};
+    try {
+      if (a.action === 'create') {
+        const s = sessions.create({
+          chatKey: String(a.chatKey || 'game:minecraft'),
+          trigger: 'game',
+          triggerSummary: String(a.summary || 'MC \u6e38\u620f\u4f1a\u8bdd').slice(0, 120)
+        });
+        return { ok: true, id: s.id };
+      }
+      if (a.action === 'activity') { sessions.setActivity(a.id, String(a.text || '')); return { ok: true }; }
+      if (a.action === 'stats') {
+        const s = sessions.current.get(a.id);
+        if (!s) return { ok: false, error: 'session-gone' };
+        if (Number.isFinite(a.rounds)) s.rounds = a.rounds;
+        if (a.usage) {
+          s.usage.promptTokens = Number(a.usage.promptTokens) || 0;
+          s.usage.completionTokens = Number(a.usage.completionTokens) || 0;
+          s.usage.totalTokens = Number(a.usage.totalTokens) || 0;
+          s.usage.calls = Number(a.usage.calls) || 0;
+        }
+        sessions.update(a.id);
+        return { ok: true };
+      }
+      if (a.action === 'usage') { return { ok: sessions.addExternalUsage(a.usage || {}) }; }
+      if (a.action === 'finish') { sessions.finish(a.id, a.status || 'done'); return { ok: true }; }
+      return { ok: false, error: 'unknown-action' };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  });
+  logger.info?.('[mc] \u6e38\u620f\u4f1a\u8bdd\u80fd\u529b\u5df2\u6ce8\u518c\uff08mc.session\uff09');
+} catch (e) {
+  logger.warn?.('[mc] \u6e38\u620f\u4f1a\u8bdd\u80fd\u529b\u6ce8\u518c\u5931\u8d25\uff1a' + (e?.message ?? e));
+}
+
   const onebot = new OneBotClient({
     wsUrl: cfg.snowluma?.wsUrl,
     httpUrl: cfg.snowluma?.httpUrl,

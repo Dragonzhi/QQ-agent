@@ -1,8 +1,8 @@
 # QQ-agent
 
 status: 进行中
-next: 停在 MC 玩家技能 P0 完成（冒烟通过）、P1 未开始；下一步做游戏循环 runtime + 日记记忆，再接群聊【游戏动态】注入与低频主动吐槽。人设示例库验收仍未闭环。
-updated: 2026-10-20
+next: 已撤回并行 worktree，回到单仓 main 开发；下一步推进「自主摸鱼」方案 A（proactive 提示词加摸鱼选项），并按待办继续人设示例库／群梗的实战验收。
+updated: 2026-10-22
 
 ## 待办
 
@@ -12,13 +12,30 @@ updated: 2026-10-20
 - [ ] 在加载最新代码的实例上完成一晚自动复盘验收：确认定时触发、候选起草与群梗收集均正常。历史配置为每日 04:00，执行前核对当前设置。
 - [ ] 观察 `topic-warmup` 在真实群聊中的命中与接梗效果；结合起草质量，再决定是否调整提示词或增加「万能句重试闸」。
 - [ ] 继续观察 `trendy-memes` 的工具调用与自学习落盘；若持续零触发，再排查提示词优先级和触发条件。
+- [ ] 按实际复盘输出继续优化梗收集；先完成现有待审候选与错误提示验收，再决定是否修改提示词。
+
+- [ ] 【自主摸鱼 A】扩 proactive 语义：`src/orchestrator.js:954` 主动机会提示词加“摸鱼”选项（bili_search/web_read/rss_read 现成），用不用/看什么/看完说不说由模型自决；群聊档不裁工具，agent-reach 开着即可见。成本注意：每次主动会话 = 一次完整 LLM 调用。
+- [ ] 【自主摸鱼 B】事件驱动插件：定时轮询关注源（UP 主更新/RSS），有更新才唤醒会话；参照 hot-trend-tracker 的 setInterval+unref 定时器与 after-response 借 sender 范式。set_reminder 到点只发文本不唤醒会话（orchestrator.js:1523），做不了自主闹钟。
+- [ ] 【自主摸鱼】proactive 目前只挑群（`#proactiveCandidates` 里 kind!=='group' 跳过），私聊摸鱼需放开。
+- [ ] 【安全分层】agent-reach 走全局 fetch，不在 browseLock 白名单内（“自由看”= 任意联网）：按 doc/agent-freedom-security-analysis.md 的 L0-L4，先落地“自己看 = safe / 分享 = 走现有发送闸或 confirm 审批”。
 
 ## 进行中
 
-- [ ] MC 玩家技能 P0：服务端/bot/工具链已通并冒烟通过；循环、记忆、吐槽闭环未做。
+- [ ] 「自主摸鱼」方向：方案 A（proactive 语义扩展）与 B（事件驱动插件）已与用户确认方向，实现未开始（见待办）。
+- [ ] MC 玩家技能收尾核对：P0/P1/皮肤/版本化均已完成（见已完成）；「事件驱动分享」代码已于 2026-10-21 核对确实在当前树；任意版本/Java 选择与自主循环未在运行实例复验。
 - [ ] 人设示例库与群梗学习实战验收：P0/P1/P2 代码及后续修复已提交；手动复盘、自动复盘、候选审核及真实聊天效果尚未形成完整验收结论。
 
 ## 已完成
+
+- [x] 【工程】撤回并行 worktree、回到单仓开发（2026-10-22）：核对两处 worktree 与 3 条方向分支相对 main 均 0 独有提交、`skills/` 与主仓逐文件一致、plugins 工作树同为 116d29c 且无独有提交，确认无代码可丢；把两侧 TASKS.md／WORKSPACE.md／baseline.json 归档到 `.goal-baseline/isolation-20261021/worktrees/`，删除 `E:\QQRobot\QQ-agent-memes`、`E:\QQRobot\QQ-agent-minecraft`（各约 587MB）及插件仓库内对应工作树，删除 5 条零提交分支（`feat/memes`、`feat/minecraft`、`feature/voice-bridge`、`codex/qq-agent-memes-plugins`、`codex/qq-agent-minecraft-plugins`），并把原先分流的梗收集与 MC 收尾任务收回本文件。未提交、未推送。
+
+- [x] 【minecraft 方向】定掌技能侧是否跟随 worktree 的 src/：已实测 ESM 会把 junction 路径规范化成主工作区真身（技能+runner 默认走主工作区的 src/*、data/*、runtime/*）；要 worktree 侧 src/ 对技能生效，启动需加 `NODE_OPTIONS=--preserve-symlinks`（已实测可保留联接路径，但两套 src/* 会同时驻留进程）。（改为独立技能副本，按默认 Node 解析即可指向本工作区；无需 preserve-symlinks。）
+
+- [x] 各方向 worktree 装依赖：node_modules 被 .gitignore 挡着不共享；进各 worktree 跑 `pnpm install`（store 硬链，几乎不占额外空间）。（两边实际使用 npm ci --ignore-scripts，450 packages；未执行安装脚本，桌面启动未验证。）
+
+- [x] 【minecraft 方向】在案屿里定义 `E:\\QQRobot\\QQ-agent-minecraft`（分支 feat/minecraft）的任务清单——本轮只建好环境，方向内容未列，不空想猜。（已按方向整理，见对应 TASKS.md 与 WORKSPACE.md。）
+
+- [x] 【memes 方向】在案屿里定义 `E:\\QQRobot\\QQ-agent-memes`（分支 feat/memes）的任务清单——本轮只建好环境，方向内容未列，不凭空猜。（已按方向整理，见对应 TASKS.md 与 WORKSPACE.md。）
 
 - [x] 预算停机体验优化：用户遇到 30 万预算耗尽循环停止（bot 傻站服务器）。改为：停机时游戏内告别 + 60 秒后自动优雅下线（存盘关服）；预算上限默认 30 万→100 万（约 6~8 小时）。2026-10-20
 - [x] 调研+实施"让它真的会玩"（012）：读透 Voyager/MindCraft 源码。① 反射模式层 modes.mjs（保命/怯战/脱困/捡物/插把，500ms 检查，5 个可关）；② 知识层：MC 生存手册 + 实体相对描述（距离·方向·高低）+ ASCII 俯视图 + think 字段；③ 动作层：searchFor/collect/craft/attack(修 hostile 过滤 bug,支持按名字+远追)/flee/digDown(安全阀)/goToSurface/rememberHere/collectItems + 方块别名表 + 字符串动作解析。实测：击杀僵尸、捡物、被围夜逃、think 战术合理。2026-10-20
@@ -31,6 +48,11 @@ updated: 2026-10-20
 - [x] MC 自定义皮肤 + 一键围观：SkinsRestorer（Hangar 15.12.6）+ `.customskin` 文件注册 + URL 改写本地方案；bot 进服自动换肤（"[SkinsRestorer] Your skin changed." 实测）；runner serve /skin.png；mc_online 自动把「小鲸鱼的世界 127.0.0.1:25565」写进客户端 servers.dat（根+同版本目录，带备份、幂等）。2026-10-19
 - [x] MC 任意版本支持：`javaPath` 设置 + 按服务端版本自动选 Java（1.16.5-→8 / 1.17~1.20.4→17 / 1.20.5+→21，选满足要求的最低版本）；README 补服务端软件×版本×Java 对照表；pickJava 单测 9 例全过、冒烟测试回归通过。2026-10-19
 - [x] MC 玩家技能 P0（`skills/minecraft/`）：Paper 1.20.1 本地服 + mineflayer bot + HTTP 控制通道 runner；工具 mc_online/mc_status/mc_observe/mc_act/mc_offline 全部注册并冒烟通过（起服→进服→观察→说话→挖掘→关机→世界落盘）。2026-10-18
+- [x] agent 自由度安全治理分析（`doc/agent-freedom-security-analysis.md`，随 671ec01 提交）：盘点现状四层（装机时 permissions 授权 / 网络白名单+SSRF / 内容级 pending 审批 / 主人识别），指出缺“运行时危险动作 → 管理员批准”一层；参照 DSH 沙箱契约（默认关+按次申请+最小权限+一次性+fail-closed）、Claude Code、Codex、OpenHands、LangGraph，给出 L0 风险分级 → L1 审批队列（复用 pending 状态机）→ L2 QQ 私聊审批通道 → L3 LLM 自动审核 → L4 执行隔间（照抄 minecraft runner 子进程范式）的方案与 P0-P3 实施顺序。2026-10-20
+- [x] 并行开发环境（工程侧）：`git fetch --all --prune` 后确认 main（671ec01）存在且与 origin/main 同步；从 main 创建 worktree `feat/memes` → `E:\\QQRobot\\QQ-agent-memes`（分支与目标目录原先均不存在，未覆盖/未删除/未强推；未暂存/未提交/未合并/未推送）。worktree 的 `skills/`、`plugins/` 以目录 junction 软链接到主工作区 `E:\\QQRobot\\QQ-agent`（14 skills + 21 plugins 可见，readdir 透传，git status 干净——二者均被 .gitignore）。`data/`、`runtime/` 刻意不链接：data 须每实例独立（instance-lock 本就禁止双实例），runtime 含 1.6GB 便携 QQ 且双实例并发有进程冲突风险。2026-10-21
+- [x] 核对 MC 事件驱动分享实现是否在当前代码（2026-10-20 留痕称与记录不符）：2026-10-21 在主工作区逐项核对——loop.mjs 有 share 决策+outbox、runner.mjs 有 /outbox、index.js 有分享轮询+test-send、skill.json 有 share 设置，代码一无缺失；`data/minecraft-share-state.json` 不存在只说明此后没有分享触发过。结论：实现未丢失，此前的“不符”是核对上下文有误。 2026-10-21
+- [x] git 合并与推送（2026-10-20 晚）：把 feature/voice-bridge 上全部工作快进合并进 main 并推送 origin（1dd73e7..671ec01，41 文件 +5820/-98）。合并前新提交两笔：`37259c8` feat(game) 控制台「游戏」页筩+ 游戏无关能力（routes/app.js/tool-registry 的 game 分类、ui 13-game.js、冒烟测试、起服脚本、mineflayer 依赖）、`671ec01` doc 交接记录+安全治理分析。合并前验证：skill-test 24/24、coverage-wiring 5/5、render-test 85、skill-modal-ui 32、scroll-test 17、prompt-anchor 全通；顺修 routes.js 缩进、注册 game 工具分类、补 minecraft serverDir/botHost 的 configSchema、删临时脚本。tools-skill-audit 余 9 项失败均为其他技能存量问题（qqzone/qzone-diary 分类、whale-memes 空 required、pixiv schema、qukan 能力未实现等），MC 相关项已清零。 2026-10-20
+- [x] 并行开发环境（minecraft 方向，工程侧）：从 main（671ec01）创建 worktree `feat/minecraft` → `E:\\QQRobot\\QQ-agent-minecraft`（分支与目标目录原先均不存在，未覆盖/未强推/未暂存/未提交/未合并/未推送；主工作区保持 main 不动）。沿用既定约定：`skills/`、`plugins/` 以目录 junction 链接主工作区（14 skills + 23 plugins 可见、readdir 透传、worktree git status 干净）；`data/`、`runtime/` 不链接（实例隔离/便携 QQ 体积与进程冲突），仅把 `data/config.json` 复制成种子供该实例启动。已实测结论：ESM 加载会把 junction 路径规范化成主工作区真身（探针验证 import.meta.url），即技能及其 runner 默认跑主工作区的 src/*、data/*、runtime/*——MC 的世界/运行时文件仍归主工作区，worktree 侧改 src/ 不会被技能看到；要翻转需 `NODE_OPTIONS=--preserve-symlinks`（已实测有效）。 2026-10-21
 
 以下开发结果属于历史工作，本轮仅核对现有提交和相关源码；不代表本轮重新实现或重新验证。
 
@@ -45,7 +67,21 @@ updated: 2026-10-20
 
 ## 交接摘要
 
-### MC 玩家技能（2026-10-18 P0，未接群聊闭环）
+### 2026-10-22 撤回并行 worktree（当前有效）
+
+- 并行开发实际未产出：两个 worktree 及全部方向分支相对 main 都是 0 提交，`skills/` 与主仓逐文件一致，`plugins/` 工作树停在 116d29c 无独有提交。根因是运行约束而非流程细节——同一台机器只能跑一个 QQ/机器人实例（instance-lock、端口、便携 QQ 数据目录），两个方向无法同时验收；加上共享 `TASKS.md` 的 next／摘要／留痕每轮都要人工收敛，成本高于收益。结论：回到主仓 `main` 单线开发。
+- 已删除：worktree `E:\QQRobot\QQ-agent-memes`、`E:\QQRobot\QQ-agent-minecraft`（各 587MB，主体是各自 node_modules）及二者在插件仓库 `E:\QQRobot\qq-agent-plugins.git` 中的工作树；分支 `feat/memes`、`feat/minecraft`、`feature/voice-bridge`（均已在 main 中）、`codex/qq-agent-memes-plugins`、`codex/qq-agent-minecraft-plugins`（均为 116d29c）。`git worktree list` 现在只剩主工作区，插件仓库同样只剩主工作区。
+- 回收内容：两侧改写的 TASKS.md、WORKSPACE.md、baseline.json 与 VS Code 工作区文件已归档到 `.goal-baseline/isolation-20261021/worktrees/`；原先分流的七项梗收集待办、MC 收尾核对与人设实战验收已收回本文件，不再区分「主目录／方向工作区」。
+- 现状：`main` = `origin/main` = 671ec01，未提交改动只有本文件的记录更新；`plugins` 仓 main 领先 origin 6 个提交（既有状态，本轮未推送）。本轮未启动机器人/QQ/MC、未调用模型、未跑测试。
+- 旧的 worktree 说明（junction、`--preserve-symlinks`、独立技能副本、按方向合并）仅作历史保留，已无可操作对象；后续任何改动直接提交 `main`。
+
+### 2026-10-21 工作区隔离修正（2026-10-22 已撤回，见上）
+- 原六项梗收集待办及其进行中任务曾分流到 QQ-agent-memes/TASKS.md；MC 收尾进行中任务曾分流到 QQ-agent-minecraft/TASKS.md（2026-10-22 已收回本文件）。主目录保留自主摸鱼、安全治理与方向合并任务。
+- 两个方向已按名称加入案屿真实清单，项目级 isle Skill 均已补齐，三条线自动归为 QQ-agent 一组。
+- 原共享 skills/plugins 方案已替换：两边技能独立副本、插件独立 Git worktree 分支；基线与原链接备份见各目录 .goal-baseline/isolation-20261021，具体保存／合并边界见 WORKSPACE.md。先前关于“技能默认回到主目录”的描述仅适用于已移走的旧 junction。
+- 两份方向任务已重新分流，MC 的 P1 未开始等旧提示已纠正；主目录无关任务与历史保留。两边依赖安装成功（忽略安装脚本），未启动机器人、QQ、MC 或调用模型。独立运行与端口验收仍待完成。
+
+### MC 玩家技能（2026-10-18 的历史 P0 记录）
 
 - 新增 `skills/minecraft/`：`index.js`（Skill 入口+工具注册）、`runner.mjs`（独立子进程：Paper 服务端 + mineflayer bot + 127.0.0.1:25580 控制通道）、`skill.json`（含"你是真的在玩 MC"提示词片段）、`README.md`。
 - 依赖已装：`mineflayer@4.39.0`、`mineflayer-pathfinder@2.4.5`（写进 package.json）。服务端 jar 在 `runtime/minecraft-server/paper-1.20.1-196.jar`（sha256 校验过），`server.properties` 为 offline 模式 + 绑 127.0.0.1。
@@ -55,9 +91,18 @@ updated: 2026-10-20
 - `skills/` 与 `runtime/` 均被 .gitignore 排除（项目惯例），本体只在本地。
 - 2026-10-19 追加（皮肤/围观）：皮肤文件默认 `C:\Users\32485\Pictures\肥鱼\DeepSeek大肥鱼.png`（64x64 标准布局，无需转换）；踩坑：① SkinsRestorer 的 URL 输入拒绝内网地址（localhost/LAN 都试过，报 "The skin URL or file format is invalid"），必须走 file 输入；② `createcustom` 生成的纹理 URL 指向 textures.minecraft.net（自定义皮肤 hash 不存在会 404），必须改写成 runner 本地 URL；③ `/skin` 命令只能玩家身份执行，由 bot 自己 chat 触发；④ `applyskin` 只是重应用当前皮肤，不能指定皮肤。
 - 2026-10-19 追加：不限于 Paper——任何单 jar 服务端（原版/Paper/Spigot/Purpur）即换即用；版本覆盖 1.8~1.21.11（mineflayer 4.39 范围）；Java 按版本自动选（本机有 8/17/23 三套）。Fabric/Forge 模组服降级可用（prismarine 类库不认模组内容），「对局域网开放」可玩已有存档但需手动开 LAN。
-- 未验证：QQ-agent 运行实例内启用该技能后的真实 LLM 调用效果；P1 全部未开始。
+- 以上为 P0 阶段历史；P1 与分享链路后续已完成（2026-10-19 实测）。2026-10-22 起不再有独立工作区，MC 验收一律在主仓实例进行；不能再按“P1 未开始”重复实现。
 
-### 已确认变更与入口
+### 并行 worktree 与「自主摸鱼」方向（2026-10-21）
+
+以下 junction / preserve-symlinks 说明是隔离前历史；隔离方案与两个 worktree 已于 2026-10-22 撤回（见上），此处仅作历史保留。
+
+- 并行开发环境：两个 worktree 均基于 main 671ec01。`E:\\QQRobot\\QQ-agent-memes`（feat/memes）与 `E:\\QQRobot\\QQ-agent-minecraft`（feat/minecraft）。两者的 `skills/`、`plugins/` 都以目录 junction 链接主工作区（扩展单一事实来源；plugins 本体仍由 `E:\\QQRobot\\qq-agent-plugins.git` 管理）；`data/`、`runtime/` 按约定不链接（data 须每实例独立，instance-lock 本就禁止双实例；runtime 含便携 QQ 且双实例并发有进程冲突风险）。minecraft worktree 额外把 `data/config.json` 复制一份当种子（副本非链接）供启动。
+- 已实测关键行为（探针）：ESM 加载会把 junction 路径规范化成主工作区真身（import.meta.url 落在 `E:/QQRobot/QQ-agent/skills/`）。因此技能及其 runner 默认跑主工作区的 `src/*`、`data/*`、`runtime/*`：MC 世界与运行时文件仍归主工作区，而 worktree 侧改 `src/` 不会被技能看到。要翻转这个行为，启动时加 `NODE_OPTIONS=--preserve-symlinks`（已实测可保留联接路径），但两套 `src/*` 会同时驻留进程，需懂这层含义再用。
+- 「自主摸鱼」（让胖鱼按自己意愿刷视频、看帖子）方向已与用户确认为 A+B：A = 扩 proactive 语义（`src/orchestrator.js` 定时器已在跑——30~90 分钟随机+概率+挑安静群；把“摸鱼”列为可选项即可；群聊档不裁工具，agent-reach 的 bili_search/web_read/rss_read 是现成能力）；B = 事件驱动插件（定时轮询关注源、有更新才唤醒，参照 hot-trend-tracker 的 setInterval+unref 与 after-response 钩子借 sender 的范式，通知不绕过 SendQueue）。
+- 安全边界（承接 doc/agent-freedom-security-analysis.md）：agent-reach 走全局 fetch+自带私网拒绝，不在 browseLock 管控内，“自己看”= 任意联网。先行分层：自己看 = safe 无副作用；分享到群 = 走现有发送闸（白名单+限频），将来挂 L1 审批队列。
+- 未验证/待核对：① 两个 worktree 同时运行时会话/热重载行为未测（同一物理 skills 目录被两边 fs.watch，可能双触发 reload＋ instance-lock 本身禁止双实例）；② junction 依赖主工作区路径，主工作区目录移动/删除会导致链接失效；③ `--preserve-symlinks` 模式下的实际启动效果未在真实应用里验证。
+### 历史确认变更与入口（2026-10-18）
 
 - 本轮核对分支为 `feature/voice-bridge`，HEAD 为 `81dba96`。历史记录称上述早期提交未推送；本轮未检查远程同步状态，不据此断言当前是否已推送。
 - 复盘与群梗核心：`src/persona-review.js`、`src/group-memes.js`；服务在 `src/app.js` 挂载 `startPersonaReviewLoop`。
@@ -107,7 +152,7 @@ updated: 2026-10-20
 
 ### 接手的第一个动作
 
-先核对当前实例是否已加载 `fce7c8f` 及后续代码；如未加载，重启后再通过「立即跑一次」验证示例与群梗两路均能产出待审候选。该步骤完成后再做整晚定时复盘与真实聊天效果验收。
+单仓（`main`）推进「自主摸鱼」方案 A：改 `src/orchestrator.js:954` 主动机会提示词，把“摸鱼”作为模型可选项，先用小群/私聊低频试，观察成本与发言质量。人设示例库/群梗的实战验收仍未闭环，见待办。并行 worktree 方案已撤回，不要再新建。
 
 ## 工作留痕
 
@@ -124,3 +169,6 @@ updated: 2026-10-20
 - 2026-10-18 · Codex：规范整理 TASKS.md，补齐任务清单并合并历史交接，核对近期提交及两路 12000 输出预算；文档整理完成，功能实战验收仍进行中；已回读核对文档结构与内容一致性，未运行测试，运行状态与历史验证未复核。
 - 2026-10-20 · lead：MC 手感修复（用户反馈“动作一顿一顿、砍掉一个方块就说一句话”）：collect 改为批量采集（默认 8 个/上限 24，单次 15s 预算，第一个目标 32 格内、之后只收 16 格内，采不动/血少/到点自动收工）；attack 改为连续打（自动兑剑、追不上/血少≤8/打死即停，攻击冷却 350ms）；动作超时护罩 20s→30s。话闸：say 从“每轮直发”改为——玩家在说话随时可回、没人说至少慌 45s、与最近 6 句相似度≥0.33 直接吐掉（bigram Dice）；提示词同步改口（闹头采集/赶路/打怪时 say 必须留空）。similarText 单测 9/10；真实对局未目验，需下线→上线生效。
 - 2026-10-20 · lead：MC 手感修复第二轮（用户反馋“动作一顿一顿、砍一个方块说一句话”）：① collect 批量采集（默认 8 个，15s 预算，分清“走不过去/挖不动”）、attack 连续打（自动兒剑、追不上/血少≤8 收手）、动作超时 20s→30s、bot.dig 与寻路内部 race。② 话闸：say 从每轮直发改为——玩家在说话随时可回、没人说至少慌 45s、与最近 6 句相似度≥0.33 吓掉（bigram Dice）。③ 修三个真 bug：`{"type":"goto"}` 不被识别（整步动作静默失败，一顿一顿的隐形主因）、place 因 findBlocks 调色板预检喂空 position 块崩 null distanceTo、searchFor 寻路无护罩。④ 提示词补合成账（oak_planks→crafting_table→stick，1 原木就够做工作台）+ dig {dx,dy,dz} 任意方向 + 被围住别死磕 digDown。⑤ data/config.json 的 sessionTokenCap 被设置库存成 0（无限），按设计意图恢复 100 万。验证：话闸单测 6/6；四轮端到端（真实 node 启动，沙箱里 process.execPath 是 Electron 启不动 runner）——6 轮里只发 2 句话（隔 68s，均为情境句）、2 句复读被吞；横向挖挖出石头/煤矿、place 不再崩、无循环出错。未规划：被怪围住时自动兒剑（反射层）未做；模型依然会因“不安全”拒绝合成。
+- 2026-10-21 · lead：并行开发环境搭建（工程侧）：fetch --all --prune 后确认 main=671ec01 与 origin/main 同步，创建 worktree `E:\\QQRobot\\QQ-agent-memes`（分支 feat/memes；分支与目录原先均不存在，未覆盖/未强推/未提交/未推送），主工作区保持 main 不动；worktree 的 skills/、plugins/ 以目录 junction 软链接到主工作区（14 skills + 21 plugins 可见、readdir 透传、git status 干净），data/、runtime/ 刻意不链接（实例隔离/体积与进程冲突）。另按案屿 isle 规范回写本文件。未验证：两 worktree 同跑时的热重载双触发、软链接在真实启动实例中的加载效果。同日续（minecraft 方向）：同法创建 worktree `feat/minecraft` → `E:\\QQRobot\\QQ-agent-minecraft`（分支与目录原先均不存在，主工作区保持 main）；延用约定链 skills/+plugins/（junction）、不链 data/+runtime/，但先多建了 data/runtime 两个连接，查到早班会留痕里写明“刻意不链”及理由后按约定回退（rmdir 只删重解析点，主工作区 data 43 条目/runtime/minecraft-server 完好已复核），改为复制 data/config.json 当种子。探针实测：ESM 会把 junction 规范化成主工作区真身（import.meta.url），即技能+runner 默认走主工作区的 src/*、data/*、runtime/*；`--preserve-symlinks` 可翻转。另核对掉 TASKS.md 挂着的一事：MC 事件驱动分享代码确实在当前树（share/outbox/轮询/test-send 四处依次核出），此前“不符”是核对上下文有误。未验证：worktree 真实启动（node_modules 未装）、--preserve-symlinks 模式下的实际效果。
+- 2026-10-21 · Codex：修复两个方向 skills/plugins 共享耦合，创建独立技能副本及插件分支、安装依赖，并分流方向任务与 WORKSPACE.md、登记案屿和补齐 isle Skill；环境与记录准备完成；哈希／realpath／Git 顶层检查和两次 npm ci 成功，独立机器人运行未验证，未提交／推送。
+- 2026-10-22 · DeepSeek Harness：撤回并行 worktree，并同步回写本文件。核对两处 worktree 与 3 条方向分支均 0 独有提交、skills 与主仓逐文件一致、plugins 工作树无独有提交后：① 归档方向 TASKS/WORKSPACE/baseline 到 `.goal-baseline/isolation-20261021/worktrees/`；② 删除两个 worktree（约 1.2GB）及插件仓库对应工作树、5 条空分支（feat/memes、feat/minecraft、feature/voice-bridge、codex/*-plugins）；③ 本文件更新——七项梗收集待办与 MC 收尾/人设验收收回主线，next 改为单仓推进自主摸鱼 A，交接摘要新增「2026-10-22 撤回并行 worktree（当前有效）」并标注旧隔离段已撤回。环境整理完成，回到单仓 main 开发；未启动实例、未跑测试、未提交／推送。

@@ -66,8 +66,18 @@ function renderPersonaExamplesPanel() {
   // rejected 不展示，只留一个数量：让用户知道撤回/淘汰的东西没有丢
   const rejectedN = list.length - active.length - pending.length;
 
-  const row = (e, isActive) => `
-    <div class="pe-row" data-id="${esc(e.id)}">
+  const row = (e, isActive) => {
+    // 第二行元信息：生效条显示梗解释（会进提示词）；待审条额外显示「依据 + 可信度」方便快速筛
+    const note = String(e.note || '').trim();
+    const why = String(e.why || '').trim();
+    const conf = Number(e.confidence);
+    const meta = [
+      note ? `梗解释：${note}` : '',
+      why ? `依据：${why}` : '',
+      Number.isFinite(conf) && conf > 0 ? `可信 ${conf}` : ''
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="pe-row${meta ? ' pe-row-has-note' : ''}" data-id="${esc(e.id)}">
       <span class="pe-source" title="来源：${esc(e.source || '未知')}">${esc(EXAMPLE_SOURCE_LABEL[e.source] || e.source || '未知')}</span>
       <span class="pe-trigger" title="${esc(e.trigger)}">${esc(e.trigger)}</span>
       <span class="pe-good" title="${esc((e.good || []).join('\n'))}">${esc((e.good || [])[0] || '')}</span>
@@ -75,10 +85,13 @@ function renderPersonaExamplesPanel() {
         ${isActive
           ? `<button type="button" class="btn btn-small pe-status" data-status="pending" title="撤回：置回待审，提示词不再注入">撤回</button>`
           : `<button type="button" class="btn btn-small btn-primary pe-status" data-status="active" title="晋升：注入提示词（会查重，受上限约束）">晋升</button>`}
+        ${isActive ? '' : '<button type="button" class="btn btn-small pe-reject" title="驳回：标记为不合适，同样触发句之后不会再被复盘收进来">驳回</button>'}
         <button type="button" class="btn btn-small pe-edit">编辑</button>
         <button type="button" class="btn btn-small btn-danger pe-del">删除</button>
       </span>
+      ${meta ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}
     </div>`;
+  };
 
   const group = (title, rows, isActive) => `
     <div class="pe-group">
@@ -94,13 +107,36 @@ function renderPersonaExamplesPanel() {
   };
   const rvHour = rvNum(rv.hour, 4, 0, 23);
   const rvMaxDrafts = rvNum(rv.maxDrafts, 5, 1, 10);
+  const rvMinConf = (() => {
+    const n = Number(rv.minConfidence);
+    return Number.isFinite(n) ? Math.min(0.95, Math.max(0.5, n)) : 0.72;
+  })();
+  const rvMaxMemes = rvNum(rv.maxMemesPerChat, 2, 1, 5);
   const rvEnabled = rv.enabled === true;
   const rvMemes = rv.groupMemes !== false;
 
-  // ── 群内梗库（P2）：per-chat 展示，行内晋升/撤回/删除 ──
-  const memeChats = (state.personaGroupMemes || []).filter((c) => Array.isArray(c.memes) && c.memes.length);
-  const memeRow = (m) => `
-    <div class="pe-row" data-meme-id="${esc(m.id)}">
+  // ── 群内梗库（P2）：per-chat 展示，行内晋升/撤回/驳回/删除 ──
+  // rejected（驳回）只在数据里参与去重、不再展示（和示例库口径一致），每群头部给计数
+  const memeChats = (state.personaGroupMemes || [])
+    .map((c) => {
+      const all = Array.isArray(c.memes) ? c.memes : [];
+      return {
+        chatId: c.chatId,
+        visible: all.filter((m) => m.status !== 'rejected'),
+        rejected: all.filter((m) => m.status === 'rejected').length
+      };
+    })
+    .filter((c) => c.visible.length);
+  const memeRow = (m) => {
+    // 待审梗显示模型自证（依据 + 可信度）：人工判断值不值得晋升
+    const evidence = String(m.evidence || '').trim();
+    const conf = Number(m.confidence);
+    const meta = [
+      evidence ? `依据：${evidence}` : '',
+      Number.isFinite(conf) && conf > 0 ? `可信 ${conf}` : ''
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="pe-row${meta && m.status !== 'active' ? ' pe-row-has-note' : ''}" data-meme-id="${esc(m.id)}">
       <span class="pe-source" title="状态：${esc(m.status || '未知')}">${esc(MEME_STATUS_LABEL[m.status] || m.status || '未知')}</span>
       <span class="pe-trigger" title="${esc(m.name)}">${esc(m.name)}</span>
       <span class="pe-good" title="${esc(m.meaning)}">${esc(m.meaning)}${m.example ? `（例：${esc(m.example)}）` : ''}</span>
@@ -108,19 +144,22 @@ function renderPersonaExamplesPanel() {
         ${m.status === 'active'
           ? `<button type="button" class="btn btn-small pe-meme-status" data-status="pending" title="撤回：置回待审，提示词不再注入">撤回</button>`
           : `<button type="button" class="btn btn-small btn-primary pe-meme-status" data-status="active" title="晋升：注入该群提示词的【群内梗】段（会查重，受上限约束）">晋升</button>`}
+        ${m.status === 'pending' ? '<button type="button" class="btn btn-small pe-meme-reject" title="驳回：标记为不是梗，同名候选之后不会再被收进来">驳回</button>' : ''}
         <button type="button" class="btn btn-small pe-meme-edit" title="编辑梗名/含义/例句（不改变状态）">编辑</button>
         <button type="button" class="btn btn-small btn-danger pe-meme-del">删除</button>
       </span>
+      ${meta && m.status !== 'active' ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}
     </div>`;
+  };
   const memeGroup = (chat) => `
     <div class="pe-meme-chat" data-chat="${esc(chat.chatId)}">
-      <div class="pe-group-head">群 ${esc(chat.chatId)}<span class="muted">（${chat.memes.length} 条）</span></div>
-      ${chat.memes.map(memeRow).join('')}
+      <div class="pe-group-head">群 ${esc(chat.chatId)}<span class="muted">（${chat.visible.length} 条${chat.rejected ? ` · 已驳回 ${chat.rejected} 条` : ''}）</span></div>
+      ${chat.visible.map(memeRow).join('')}
     </div>`;
 
   box.innerHTML = `
     <h3 style="margin-bottom:4px">回复示例库</h3>
-    <div class="hint" style="margin-bottom:10px">生效 ${active.length}/${maxActive} · 待审 ${pending.length} 条 · 已驳回/淘汰 ${rejectedN} 条（不展示）。生效中的示例会渲染进提示词的【回复示例】段；存档页 hover 机器人发言可一键收藏。</div>
+    <div class="hint" style="margin-bottom:10px">生效 ${active.length}/${maxActive} · 待审 ${pending.length} 条 · 已驳回/淘汰 ${rejectedN} 条（不展示）。生效中的示例会渲染进提示词的【回复示例】段（带梗解释的连解释一起注入，模型才懂群内黑话）；存档页 hover 机器人发言可一键收藏。待审行会显示模型自评的「依据/可信度」，不合适的点「驳回」，同一触发句不会再被收。</div>
     <div class="pe-group" id="pe-review-box">
       <div class="pe-group-head">每晚复盘</div>
       <div class="checkbox-row"><input type="checkbox" id="pe-review-enabled" ${rvEnabled ? 'checked' : ''} />
@@ -128,6 +167,8 @@ function renderPersonaExamplesPanel() {
       <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:6px 0">
         <label class="hint" style="margin:0">触发小时(0-23) <input type="number" id="pe-review-hour" min="0" max="23" value="${rvHour}" style="width:64px" /></label>
         <label class="hint" style="margin:0">每日起草上限(1-10) <input type="number" id="pe-review-maxdrafts" min="1" max="10" value="${rvMaxDrafts}" style="width:64px" /></label>
+        <label class="hint" style="margin:0">可信度门槛(0.5-0.95) <input type="number" id="pe-review-minconf" min="0.5" max="0.95" step="0.01" value="${rvMinConf}" style="width:70px" /></label>
+        <label class="hint" style="margin:0">每群梗上限(1-5) <input type="number" id="pe-review-maxmemes" min="1" max="5" value="${rvMaxMemes}" style="width:56px" /></label>
         <span class="checkbox-row" style="margin:0"><input type="checkbox" id="pe-review-groupmemes" ${rvMemes ? 'checked' : ''} />
           <label for="pe-review-groupmemes">收集群内梗</label></span>
       </div>
@@ -140,6 +181,7 @@ function renderPersonaExamplesPanel() {
     <div class="field pe-add-form">
       <label>手动添加（保存为待审）</label>
       <input type="text" id="pe-add-trigger" placeholder="触发句：群友会说什么（不带昵称）" />
+      <input type="text" id="pe-add-note" placeholder="梗解释（可选）：这个梗什么意思、为什么这样回" />
       <textarea id="pe-add-good" style="min-height:52px" placeholder="好回复（每行一条）"></textarea>
       <textarea id="pe-add-bad" style="min-height:36px" placeholder="坏回复（可选，每行一条）"></textarea>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
@@ -151,7 +193,7 @@ function renderPersonaExamplesPanel() {
     ${group('待审', pending, false)}
     <div class="pe-group" id="pe-memes-box">
       <div class="pe-group-head">群内梗库</div>
-      <div class="hint" style="margin-bottom:6px">每群独立的黑话/绰号/事件梗库：生效中的会注入对应群提示词的【群内梗】段。由每晚复盘自动收集，晋升后才生效；查重与上限（20 条/群）同示例库。</div>
+      <div class="hint" style="margin-bottom:6px">每群独立的黑话/绰号/事件梗库：生效中的会注入对应群提示词的【群内梗】段。由每晚复盘自动收集，晋升后才生效；只收过高可信度闸的候选（每群每次最多几条在「每晚复盘」里调）。判断不是梗就点「驳回」，同名候选不会再被收（驳回后不再展示，只留去重记忆）；查重与上限（20 条/群）同示例库。</div>
       ${memeChats.map(memeGroup).join('') || '<div class="hint">（还没有任何群梗：启用复盘跑过一轮后，这里会出现各群的候选梗）</div>'}
     </div>`;
 
@@ -169,13 +211,18 @@ function renderPersonaExamplesPanel() {
     const hint = $('#pe-review-hint');
     const hour = rvNum($('#pe-review-hour')?.value, 4, 0, 23);
     const maxDrafts = rvNum($('#pe-review-maxdrafts')?.value, 5, 1, 10);
+    const rawConf = Number($('#pe-review-minconf')?.value);
+    const minConfidence = Number.isFinite(rawConf) ? Math.min(0.95, Math.max(0.5, rawConf)) : 0.72;
+    const maxMemesPerChat = rvNum($('#pe-review-maxmemes')?.value, 2, 1, 5);
     const patch = {
       persona: {
         review: {
           enabled: $('#pe-review-enabled')?.checked === true,
           hour,
           maxDrafts,
-          groupMemes: $('#pe-review-groupmemes')?.checked !== false
+          groupMemes: $('#pe-review-groupmemes')?.checked !== false,
+          minConfidence,
+          maxMemesPerChat
         }
       }
     };
@@ -186,6 +233,8 @@ function renderPersonaExamplesPanel() {
       // 把兜底后的值写回输入框（用户填了越界数字时有即时纠正的视觉反馈）
       const hi = $('#pe-review-hour'); if (hi) hi.value = String(hour);
       const mi = $('#pe-review-maxdrafts'); if (mi) mi.value = String(maxDrafts);
+      const ci = $('#pe-review-minconf'); if (ci) ci.value = String(minConfidence);
+      const mm = $('#pe-review-maxmemes'); if (mm) mm.value = String(maxMemesPerChat);
       if (hint) hint.textContent = '已保存 ✓';
     } catch (e) {
       if (hint) hint.textContent = `保存失败：${e.message}`;
@@ -202,7 +251,7 @@ function renderPersonaExamplesPanel() {
       const r = await api('/api/persona/review/run', { method: 'POST', body: '{}' });
       const s = r.summary || {};
       const errN = (s.errors || []).length;
-      alert(`复盘完成：起草示例 ${s.examplesDrafted ?? 0} 条，收集群梗 ${s.memesDrafted ?? 0} 条，扫描会话 ${s.chatsScanned ?? 0} 个`
+      alert(`复盘完成：起草示例 ${s.examplesDrafted ?? 0} 条（质量闸拦下 ${s.examplesDropped ?? 0}），收集群梗 ${s.memesDrafted ?? 0} 条（拦下 ${s.memesDropped ?? 0}），扫描会话 ${s.chatsScanned ?? 0} 个`
         + (errN ? `\n有 ${errN} 个错误，详见服务端日志。` : ''));
       await loadPersonaExamplesPanel();   // 待审区可能出现新条目，重拉
     } catch (e) {
@@ -217,7 +266,8 @@ function renderPersonaExamplesPanel() {
     const body = {
       trigger: ($('#pe-add-trigger')?.value || '').trim(),
       good: ($('#pe-add-good')?.value || ''),
-      bad: ($('#pe-add-bad')?.value || '')
+      bad: ($('#pe-add-bad')?.value || ''),
+      note: ($('#pe-add-note')?.value || '').trim()
     };
     if (!body.trigger) { const h = $('#pe-add-hint'); if (h) h.textContent = '触发句不能为空'; return; }
     try {
@@ -246,6 +296,19 @@ function renderPersonaExamplesPanel() {
       } catch (err) {
         e.currentTarget.disabled = false;
         // 409 查重等后端原因直接亮给用户（api() 已把 error 文本带回来）
+        alert(err.message);
+      }
+    });
+    rowEl.querySelector('.pe-reject')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/persona/examples/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ status: 'rejected' })
+        });
+        await loadPersonaExamplesPanel();
+      } catch (err) {
+        e.currentTarget.disabled = false;
         alert(err.message);
       }
     });
@@ -281,6 +344,19 @@ function renderPersonaExamplesPanel() {
         } catch (err) {
           e.currentTarget.disabled = false;
           // 409 同名查重等后端原因直接亮给用户（api() 已把 error 文本带回来）
+          alert(err.message);
+        }
+      });
+      rowEl.querySelector('.pe-meme-reject')?.addEventListener('click', async (e) => {
+        e.currentTarget.disabled = true;
+        try {
+          await api(`/api/persona/group-memes/${chatId}/${encodeURIComponent(memId)}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: 'rejected' })
+          });
+          await loadPersonaExamplesPanel();
+        } catch (err) {
+          e.currentTarget.disabled = false;
           alert(err.message);
         }
       });

@@ -272,7 +272,7 @@ function openPersonaExampleModal({ example = null, entry = null, before = [], on
           ${entry ? `
             <div class="pe-context-row self"><span class="pe-context-name">${esc(entry.senderName || '我')}</span>${esc(entry.text)}</div>` : ''}
         </div>
-        <div class="hint">示例只收录下面三个字段 —— 触发句不要带昵称，防止模型学会喊名字。</div>
+        <div class="hint">触发句不要带昵称，防止模型学会喊名字；「梗解释」可选，写清群内黑话的意思，模型才学得会怎么接。</div>
       </div>` : '';
   const overlay = modelModalShell({
     head: '收进人设 · 回复示例',
@@ -280,10 +280,12 @@ function openPersonaExampleModal({ example = null, entry = null, before = [], on
       ${contextHtml}
       <div class="field"><label>触发句（群友会说什么）</label>
         <input type="text" id="pe-trigger" value="${esc(ex.trigger || '')}" placeholder="例如：华莱士不敢吃 吃一次拉一次" /></div>
+      <div class="field"><label>梗解释（可选：告诉 AI 这个梗/这段对话什么意思）</label>
+        <textarea id="pe-note" style="min-height:48px" placeholder="例：群内黑话「胶固」=……；模型不认识这个梗时，靠这句才能接对">${esc(ex.note || '')}</textarea></div>
       <div class="field"><label>好回复（每行一条，可给几个变体）</label>
         <textarea id="pe-good" style="min-height:72px" placeholder="每行一条">${esc((ex.good || []).join('\n'))}</textarea></div>
       <div class="field"><label>坏回复（可选，每行一条：太 AI 味的说法）</label>
-        <textarea id="pe-bad" style="min-height:48px" placeholder="可留空"></textarea></div>
+        <textarea id="pe-bad" style="min-height:48px" placeholder="可留空">${esc((ex.bad || []).join('\n'))}</textarea></div>
       <div class="hint" id="pe-hint">${ex.id ? '保存后仍为待审，去设置页晋升后生效。' : ''}</div>`,
     foot: `<button class="btn" id="pe-cancel">取消</button>
            <button class="btn btn-primary" id="pe-save">保存</button>`
@@ -294,6 +296,7 @@ function openPersonaExampleModal({ example = null, entry = null, before = [], on
     const trigger = overlay.querySelector('#pe-trigger').value.trim();
     const good = overlay.querySelector('#pe-good').value.split('\n').map((s) => s.trim()).filter(Boolean);
     const bad = overlay.querySelector('#pe-bad').value.split('\n').map((s) => s.trim()).filter(Boolean);
+    const note = overlay.querySelector('#pe-note').value.trim();
     if (!trigger) { if (hint) hint.textContent = '触发句不能为空'; return; }
     if (!good.length) { if (hint) hint.textContent = '好回复至少要有一条'; return; }
     if (!ex.id) { if (hint) hint.textContent = '缺少示例 id，请重新从存档页收藏'; return; }
@@ -302,7 +305,7 @@ function openPersonaExampleModal({ example = null, entry = null, before = [], on
     try {
       await api(`/api/persona/examples/${encodeURIComponent(ex.id)}`, {
         method: 'PUT',
-        body: JSON.stringify({ trigger, good, bad })
+        body: JSON.stringify({ trigger, good, bad, note })
       });
       if (hint) hint.textContent = '已存入待审，去设置页晋升后生效。';
       // 留 1.4s 让用户读完提示再关；期间窗口已不可再点（按钮 disabled）

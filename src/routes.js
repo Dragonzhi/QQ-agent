@@ -98,6 +98,8 @@ export function createRoutes(deps) {
   // good/bad/tags 统一按"数组或按行文本"两种形态接收（textarea 每行一条）
   const linesOf = (v) => (Array.isArray(v) ? v : String(v ?? '').split('\n'))
     .map((s) => String(s ?? '').trim()).filter(Boolean);
+  // note（梗解释）是单行文本：与 persona-review.js 的 oneLine 同口径（160 字硬上限）
+  const noteOf = (v) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
 
   return [
     // ── 游戏页签（游戏无关：哪个技能提供 game.state/game.control 就用哪个）──
@@ -454,6 +456,7 @@ export function createRoutes(deps) {
             trigger,
             good: [String(slice.target.text ?? '')],
             bad: [],
+            note: '',
             tags: [],
             source: 'capture',
             createdAt: Date.now(),
@@ -498,6 +501,7 @@ export function createRoutes(deps) {
             trigger,
             good,
             bad: linesOf(body.bad),
+            note: noteOf(body.note),
             tags: linesOf(body.tags),
             source: 'manual',
             createdAt: Date.now(),
@@ -535,6 +539,7 @@ export function createRoutes(deps) {
             next.good = good;
           }
           if (body.bad !== undefined) next.bad = linesOf(body.bad);
+          if (body.note !== undefined) next.note = noteOf(body.note);
           if (body.tags !== undefined) next.tags = linesOf(body.tags);
           const status = body.status !== undefined ? String(body.status) : cur.status;
           if (!['active', 'pending', 'rejected'].includes(status)) {

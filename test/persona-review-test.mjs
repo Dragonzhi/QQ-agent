@@ -57,7 +57,12 @@ t.section('① 扁平结构 message.content → 解析成功');
 await t.check('起草示例落进 config.persona.examples（source=review、status=pending）', async () => {
   const seen = [];
   const inner = llmByTask({
-    examples: JSON.stringify({ examples: [{ trigger: '锄大地锄吐了', good: ['受着'], bad: ['确实'], tags: ['吐槽'] }] }),
+    examples: JSON.stringify({ examples: [
+      { trigger: '锄大地锄吐了', good: ['不锄了 我认输'], bad: ['确实'], note: '锄大地=清图刷体力\n（群里刷材料）', why: '群友跟着复述锄大地', confidence: 0.9, tags: ['吐槽'] },
+      { trigger: '传送点没开更折磨', good: ['走传送点 省得来回跑'], bad: [], confidence: 0.8 },
+      { trigger: '19959878509 405360', good: ['？这啥'], confidence: 0.95 },     // 随机数字：质量闸应拦下
+      { trigger: '开电脑了今晚一起清本', good: ['好'], confidence: 0.95 }        // 水回复：质量闸应拦下
+    ] }),
     memes: JSON.stringify({ memes: [] })
   });
   const r = await runReviewOnce({
@@ -66,7 +71,8 @@ await t.check('起草示例落进 config.persona.examples（source=review、stat
     llmCall: async (args) => { seen.push(args); return inner(args); }
   });
   assert.deepStrictEqual(r.errors, [], '不应有任何错误');
-  assert.strictEqual(r.examplesDrafted, 1);
+  assert.strictEqual(r.examplesDrafted, 2);
+  assert.strictEqual(r.examplesDropped, 2, '随机数字与水回复应被质量闸拦下');
   assert.strictEqual(r.chatsScanned, 1);
   // 回归守卫：思考型端点的 reasoning 会先吃掉数千 token，输出预算给小了正文会被截成空串
   // （finishReason=length、正文 0 字），下游只看到「模型输出不是可解析的 JSON」（2026-10-17 线上故障，
@@ -74,9 +80,21 @@ await t.check('起草示例落进 config.persona.examples（source=review、stat
   assert.ok(seen[0].maxTokens >= 10000, `起草调用必须留足输出预算，实测 ${seen[0].maxTokens}`);
   assert.ok(seen[1]?.maxTokens >= 10000, `群梗调用必须留足输出预算，实测 ${seen[1]?.maxTokens}`);
   const saved = (getConfig().persona?.examples || []).filter((e) => e.source === 'review');
-  assert.strictEqual(saved.length, 1, '应写入 1 条 review 来源示例');
+  assert.strictEqual(saved.length, 2, '应写入 2 条 review 来源示例');
   assert.strictEqual(saved[0].status, 'pending', '只进待审区，不直接生效');
-  assert.deepStrictEqual(saved[0].good, ['受着']);
+  assert.deepStrictEqual(saved[0].good, ['不锄了 我认输']);
+  assert.strictEqual(saved[0].confidence, 0.9, 'confidence 随草稿落盘（面板按它筛）');
+  assert.strictEqual(saved[0].why, '群友跟着复述锄大地', 'why（自证依据）随草稿落盘');
+  // note（梗解释）随草稿落盘：换行压成单行；模型给不出时落空串而不是丢草稿
+  assert.strictEqual(saved[0].note, '锄大地=清图刷体力 （群里刷材料）', 'note 应单行化后落盘');
+  assert.strictEqual(saved[1].note, '', '没给 note 的条目落空串，不阻塞草稿');
+  const promptText = String(seen[0].messages.find((m) => m.role === 'user')?.content ?? '');
+  assert.ok(promptText.includes('note'), '起草提示词应要求顺带补 note（梗解释）');
+  assert.ok(promptText.includes('confidence'), '起草提示词应要求模型自评 confidence（质量闸靠它）');
+  assert.ok(promptText.includes('why'), '起草提示词应要求 why（为什么值得学）');
+  // 没有群友接话的回复不进样本（id4「你倒是挺勤快」后面只有自己的话 → 应被过滤）
+  assert.ok(promptText.includes('锄大地锄吐了'), '有群友接话的回复应进样本');
+  assert.ok(!promptText.includes('你倒是挺勤快'), '没人接话的回复不应进任务一样本');
   return `chatsScanned=${r.chatsScanned}`;
 });
 
@@ -85,22 +103,28 @@ t.section('② 群梗收集：per-chat 落盘 pending');
 await t.check('写进 data/group-memes/<gid>.json 且状态为 pending', async () => {
   const r = await runWith(llmByTask({
     examples: JSON.stringify({ examples: [] }),
-    memes: JSON.stringify({ memes: [{ name: '锄大地', meaning: '清图刷体力', example: '锄吐了' }] })
+    memes: JSON.stringify({ memes: [
+      { name: '锄大地', meaning: '清图刷体力', example: '锄吐了', evidence: '当天出现 3 次，群友互相复述', confidence: 0.9 },
+      { name: '没依据的梗', meaning: '听起来像梗其实只是猜测', example: '随便', confidence: 0.9 }
+    ] })
   }));
   assert.deepStrictEqual(r.errors, []);
   assert.strictEqual(r.memesDrafted, 1);
+  assert.ok(r.memesDropped >= 1, '没有 evidence 的候选应被拦下');
   assert.ok(fs.existsSync(path.join(dataDir, 'group-memes', '900001.json')), 'per-chat 文件路径正确');
   const { memes } = loadMemes(GROUP);
   assert.strictEqual(memes.length, 1);
   assert.strictEqual(memes[0].status, 'pending');
   assert.strictEqual(memes[0].name, '锄大地');
+  assert.strictEqual(memes[0].evidence, '当天出现 3 次，群友互相复述', 'evidence 随梗落盘（面板展示）');
+  assert.strictEqual(memes[0].confidence, 0.9);
 });
 
 // ── ③ 弱模型输出容错 ────────────────────────────────────────────────────
 t.section('③ 弱模型输出：围栏 + 前后说明文字仍可解析');
 await t.check('```json 围栏包裹 → 正常起草', async () => {
   const r = await runWith(llmByTask({
-    examples: '好的，结果如下：\n```json\n{"examples":[{"trigger":"你倒是挺勤快","good":["还行吧"],"bad":[],"tags":[]}]}\n```',
+    examples: '好的，结果如下：\n```json\n{"examples":[{"trigger":"你倒是挺勤快","good":["还行吧 我也刚醒"],"bad":[],"confidence":0.9,"tags":[]}]}\n```',
     memes: '{"memes":[]}'
   }));
   assert.deepStrictEqual(r.errors, []);
@@ -119,6 +143,49 @@ await t.check('返回 { choices:[…] } → 记错误、零产出，绝不静默
   assert.strictEqual(r.examplesDrafted, 0, 'choices 形状取不到正文，不该起草出示例');
   assert.strictEqual(r.memesDrafted, 0);
   assert.ok(r.errors.length >= 1, '结构与契约不符时应显式记错误');
+});
+
+// ── ⑤ 质量闸专项（2026-10-23）──────────────────────────────────────────
+// 背景：真实复盘一次收 13 条群梗 + 6 条示例，多数是普通聊天/随机数字/水回复，
+// 用户人工筛不过来。这里锁住「宁可漏收，也不拿垃圾占待审位」的几道闸。
+t.section('⑤ 质量闸：低可信 / 噪音 / 水回复 / 已驳回 / 无依据 一律不进待审');
+await t.check('示例：已驳回的同触发句不再重收，低可信与水回复拦下', async () => {
+  const { updateConfig } = await import('../src/config.js');
+  updateConfig({
+    persona: {
+      examples: [...(getConfig().persona?.examples || []), {
+        id: 'ex_rejected_seed', status: 'rejected', trigger: '老梗复投', good: ['这个不错'], bad: [],
+        source: 'review', createdAt: 1, usedAt: 0
+      }]
+    }
+  });
+  const r = await runWith(llmByTask({
+    examples: JSON.stringify({ examples: [
+      { trigger: '老梗复投', good: ['这波可以 直接上'], confidence: 0.95 },          // 已驳回 → 去重拦
+      { trigger: '低可信测试', good: ['我觉得可以先试试看'], confidence: 0.4 },        // 低可信 → 拦
+      { trigger: '开电脑了', good: ['好'], confidence: 0.95 },                       // 水回复 → 拦
+      { trigger: '[图片] [图片]', good: ['这图不错'], confidence: 0.95 }               // 占位符 → 拦
+    ] }),
+    memes: JSON.stringify({ memes: [] })
+  }));
+  assert.strictEqual(r.examplesDrafted, 0, '这些候选一条都不该进待审');
+  assert.strictEqual(r.examplesDropped, 4, '四条都应计入拦下数');
+});
+
+await t.check('群梗：每群单次上限 2 条，无依据的候选拦下', async () => {
+  const r = await runWith(llmByTask({
+    examples: JSON.stringify({ examples: [] }),
+    memes: JSON.stringify({ memes: [
+      { name: '丁梗', meaning: '没有依据的候选说法', example: '丁', confidence: 0.9 },            // 无 evidence → 拦
+      { name: '甲梗', meaning: '甲群内部黑话，指代某人', example: '甲', evidence: '出现两次，群友互相复述', confidence: 0.9 },
+      { name: '乙梗', meaning: '乙群内部黑话，指代某物', example: '乙', evidence: '出现三次', confidence: 0.9 },
+      { name: '丙梗', meaning: '丙群内部黑话，指代某事', example: '丙', evidence: '出现两次', confidence: 0.9 }
+    ] })
+  }));
+  assert.strictEqual(r.memesDrafted, 2, '每群单次最多 2 条（多出来的宁可下次）');
+  assert.ok(r.memesDropped >= 1, '无依据的候选应被拦下');
+  const { memes } = loadMemes(GROUP);
+  assert.ok(memes.every((m) => m.evidence), '落盘的群梗都必须带 evidence');
 });
 
 try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }

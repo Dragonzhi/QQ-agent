@@ -2,6 +2,8 @@
 
 > **状态**：进行中（2026-10-16 更新）｜ **进度**：P0 ✅ → P1 ✅（含 6 项 HTTP 用例）→ P2 ✅（126 过 1 败，败项为本机预存 qq-portable 环境问题）→ 复盘开关已启用（`review.enabled: true`），待实战跑一晚验收
 > **接梗专项增量**（2026-10-16，超出原计划范围）：① 新 skill `skills/topic-warmup/` 话题热身卡——最近 30 条消息扫群梗/网络梗 KB，命中词条主动注入提示词（priority 30 殿后，60s TTL 缓存）；② 核心规则「接话要有内容」进【像真人一样】段（禁「确实/受着/？」式无具体词空转）；③ 终末地敷衍反例已进示例库待审。动机与诊断：模型对「未知未知」的梗不会主动查工具，须系统主动喂；step5preview 模型能力足够，瓶颈在信息供给
+> **示例「梗解释」增量**（2026-10-23）：`config.persona.examples[]` 增加可选 `note` 字段——告诉模型这个梗/这轮对话什么意思、为什么这样接，渲染成「梗解释：」行随示例进提示词。复盘起草时顺带生成，面板/弹窗可手动补；旧条目无 note 照常工作（空白不渲染）。动机：trigger+good 只教得到句式，模型不认识群内黑话（如「龙🐉可是帝王之征」「胶固」）就学不到含义。
+> **收梗质量闸**（2026-10-23）：真实复盘一次收 13 条群梗 + 6 条示例，多是普通聊天、随机数字、"？这啥"式水回复。落盘前新增三道闸：① 模型自评 `confidence` 门槛（默认 0.72，可调）② 内容启发式（占位符/纯数字/水回复/复读触发句/无 `evidence` 一律丢）③ 每群每次最多收几条（默认 2）。待审行展示「依据/可信度」，新增「**驳回**」按钮（驳回后同 trigger/梗名不再被收；示例去重也改为 rejected 算数）。
 > **关联文档**：[README 扩展机制](../README.md) ｜ [skill-reference](extend_development/skill-reference.md) ｜ [prompt-pipeline](extend_development/prompt-pipeline.md)
 > **目标**：让机器人说话越来越像真人群友——① 一键把实战好回复沉淀进人设示例（A 路线）；② 每晚 LLM 复盘自动起草候选示例 + 收集群内自产梗（B 路线），人工只做审批。
 
@@ -42,17 +44,25 @@
   trigger: '华莱士不敢吃 吃一次拉一次',   // 群友原话，不含昵称（防模型学会喊名字）
   good: ['草 勇士', '完了 已经点了'],
   bad:  ['每个人的肠胃情况不同……'],
+  note: '这个梗/这轮对话什么意思（可选，渲染成「梗解释：」行；空白不渲染）',
+  why: '为什么值得学（群友怎么接的，复盘起草时给）',   // 面板待审行展示，方便快速筛
+  confidence: 0.8,                                    // 模型自评；低于 minConfidence 不进待审
   tags: ['吐槽'],
   source: 'capture'|'manual'|'review',   // capture=存档页收藏 / manual=面板手填 / review=复盘起草
   createdAt: 0, usedAt: 0
 }
 
 // data/group-memes/<chatId>.json —— 群内自产梗（per-chat）
-{ memes: [{ id, name, meaning, example, status, source, createdAt }] }
+{ memes: [{ id, name, meaning, example, evidence, confidence, status, source, createdAt }] }
+//   evidence = 凭什么判定它是群梗（原话/出现次数），缺失=不收；confidence 低于门槛不收
 
 // 设置项（config）
 persona.examples.maxActive: 30        // active 示例硬上限
-persona.review: { enabled: false, hour: 4, maxDrafts: 5, groupMemes: true }
+persona.review: {
+  enabled: false, hour: 4, maxDrafts: 5, groupMemes: true,
+  minConfidence: 0.72,   // 可信度门槛（0.5~0.95）：模型自评低于此值不进待审
+  maxMemesPerChat: 2     // 每群每次复盘最多收几条梗（1~5）
+}
 ```
 
 ## 4. 批次
@@ -76,7 +86,7 @@ persona.review: { enabled: false, hour: 4, maxDrafts: 5, groupMemes: true }
    - `POST /api/persona/examples/capture`：`{chatKey, localId}` → 存档取该 self 消息 + 前面最多 2 条非 self 消息 → 返回预填数据（前端弹窗可改）→ 建 pending
    - `GET /api/persona/examples` ／ `POST /api/persona/examples`（手动添加）／ `PUT /api/persona/examples/:id`（编辑/晋升/驳回）／ `DELETE /api/persona/examples/:id`
    - 晋升时：trigger 规范化查重 + 强制 maxActive（超限淘汰最旧 active）
-2. 存档页：机器人自己发的消息 hover 出「收进人设」按钮 → 弹窗预填 trigger/good/bad → 保存 pending
+2. 存档页：机器人自己发的消息 hover 出「收进人设」按钮 → 弹窗预填 trigger/good/bad，可补 note（梗解释）→ 保存 pending
 3. 设置页人设编辑区下方「示例库」面板：active/pending 分组、晋升/删除/编辑、手动添加表单
 4. **验收**：翻存档 → 一键收 → 审批 → 下一场会话生效，全链路走通
 
@@ -85,11 +95,12 @@ persona.review: { enabled: false, hour: 4, maxDrafts: 5, groupMemes: true }
 **新增**：`src/persona-review.js`；**改动**：`routes.js`（review 开关端点）、`06/07-settings-*.js`（开关/时间/上限）、`prompt.js`（群梗注入段）、`08-modals.js`（面板加「群梗」分区）
 
 1. 分钟级定时器对表，到 `review.hour` 触发一次：
-   - **任务一（示例）**：当天各群 self 消息 + 各自后续 2~3 条群友反应（「草」「哈哈哈」、接话 = 正信号）→ LLM 挑 3~5 条最像真人的 + 1~2 条最 AI 味的 → 结构化 JSON → 去重后写 pending（source: review）
-   - **任务二（群梗）**：当天存档里反复出现、但库里没有的内部黑话/绰号/事件梗 → 连含义和用例一起写 `data/group-memes/<chatId>.json`（status: pending）
+   - **任务一（示例）**：当天各群 self 消息 + 各自后续 2~3 条群友反应（「草」「哈哈哈」、接话 = 正信号）→ **只喂后面有人接话的回复**（没人理的一律不进样本，2026-10-23 起）→ LLM 挑 3~5 条最像真人的 → 结构化 JSON → 去重后写 pending（source: review）；每条顺带写 `note`（梗解释，看不出就空串，单行化 + 160 字截断）、`why`（自证依据）与 `confidence`
+   - **任务二（群梗）**：当天存档里反复出现、但库里没有的内部黑话/绰号/事件梗 → 连含义、用例、`evidence`（原话/出现次数）与 `confidence` 一起写 `data/group-memes/<chatId>.json`（status: pending），每群每次最多 `maxMemesPerChat` 条
+   - **质量闸（2026-10-23 增量）**：`minConfidence` 以下、占位符/纯数字触发句、水回复（"？这啥""确实"）、复读触发句、无 evidence 的候选一律丢；rejected 参与去重（驳回过的同 trigger/梗名不再重收）
    - 校验失败/LLM 报错 → 静默跳过并记日志，不影响主流程
 2. 群梗注入：`prompt.js` 在记忆段附近加【群内梗（本群黑话）】段——每群上限 20 条、最近优先、只注入当前会话对应群；变化频率低，属稳定前缀
-3. 用量走 addUsage（复盘成本在用量页可见）；设置页：开关、触发时间、每日上限、群梗开关
+3. 用量走 addUsage（复盘成本在用量页可见）；设置页：开关、触发时间、每日上限、群梗开关、可信度门槛、每群梗上限
 4. **验收**：mock LLM 单测起草解析；真实跑一晚 → 次日面板出现待审示例与群梗，审批后生效
 
 ### P3 可选增强（跑顺再说，不排期）

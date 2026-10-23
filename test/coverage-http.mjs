@@ -227,6 +227,7 @@ c.section('3B. 回复示例库');
     assert.equal(r.data.draft.good[0], '机器人的一句回复');
     // trigger 预填 = 前面最多 2 条非 self 消息按时间正序拼一行
     assert.equal(r.data.draft.trigger, '覆盖测试消息一 覆盖测试消息二');
+    assert.equal(r.data.draft.note, '', 'capture 预填的 note 应为空串（等人补梗解释）');
     assert.equal(r.data.before.length, 2);
   });
 
@@ -241,10 +242,11 @@ c.section('3B. 回复示例库');
   await c.check('POST /api/persona/examples：手动添加（空 good 400 / 正常 pending）', async () => {
     const empty = await hit('POST', '/api/persona/examples', { body: { trigger: '只有触发句', good: ['  ', '\n'] } });
     assert.equal(empty.status, 400, 'good 全空白应 400');
-    const ok = await hit('POST', '/api/persona/examples', { body: { trigger: '今晚吃什么', good: ['随便', '火锅？'], bad: ['我可以帮您推荐美食哦～'] } });
+    const ok = await hit('POST', '/api/persona/examples', { body: { trigger: '今晚吃什么', good: ['随便', '火锅？'], bad: ['我可以帮您推荐美食哦～'], note: '  今晚吃什么=群内每天中午的固定暗号\n第二行会被压平  ' } });
     assert.equal(ok.status, 200);
     assert.equal(ok.data.example.status, 'pending');
     assert.equal(ok.data.example.source, 'manual');
+    assert.equal(ok.data.example.note, '今晚吃什么=群内每天中午的固定暗号 第二行会被压平', 'note 应单行化并去首尾空白');
   });
 
   await c.check('PUT /api/persona/examples/:id：晋升去重 409（规范化 trigger）', async () => {
@@ -282,10 +284,11 @@ c.section('3B. 回复示例库');
   await c.check('PUT/DELETE /api/persona/examples/:id：编辑保持 pending、删除生效', async () => {
     const m = await hit('POST', '/api/persona/examples', { body: { trigger: '待编辑', good: ['旧回复'] } });
     const id = m.data.example.id;
-    const edit = await hit('PUT', `/api/persona/examples/${id}`, { body: { trigger: '已编辑', good: ['新回复', '变体'], bad: ['AI 味回复'] } });
+    const edit = await hit('PUT', `/api/persona/examples/${id}`, { body: { trigger: '已编辑', good: ['新回复', '变体'], bad: ['AI 味回复'], note: '编辑时补的梗解释' } });
     assert.equal(edit.status, 200);
     assert.equal(edit.data.example.status, 'pending', '不带 status 的编辑保持 pending');
     assert.deepEqual(edit.data.example.good, ['新回复', '变体']);
+    assert.equal(edit.data.example.note, '编辑时补的梗解释', 'PUT 应能写入/更新 note');
     const del = await hit('DELETE', `/api/persona/examples/${id}`);
     assert.equal(del.status, 200);
     const gone = await hit('DELETE', `/api/persona/examples/${id}`);

@@ -187,7 +187,9 @@ export const DEFAULT_CONFIG = {
     // ── 回复示例库（doc/persona-meme-plan.md P0）──
     // 管理员从实战沉淀的「群友：X → 你不要/你可以：Y」对比示例，渲染进用户提示的
     // 【回复示例】段（【角色设定】之后）。字段：{ id, status, trigger, good[], bad[],
-    // tags[], source, createdAt, usedAt }。status 非 'active' 不渲染 ——
+    // note, tags[], source, createdAt, usedAt }。note 是可选的「梗解释」——模型
+    // 不认识群内黑话时靠它理解含义，渲染成「梗解释：」行；空串不渲染。
+    // status 非 'active' 不渲染 ——
     // pending 供收藏/复盘的待审通道，rejected 只做留痕。trigger 不写群友昵称，
     // 防模型把示例里的称呼学进日常回复。
     examples: [],
@@ -200,7 +202,9 @@ export const DEFAULT_CONFIG = {
       enabled: false,   // 总开关
       hour: 4,          // 每天几点触发（0~23，本地时间）
       maxDrafts: 5,     // 单次最多起草几条候选示例
-      groupMemes: true  // 是否顺带收集群内自产梗（data/group-memes/<chatId>.json）
+      groupMemes: true, // 是否顺带收集群内自产梗（data/group-memes/<chatId>.json）
+      minConfidence: 0.72,   // 模型自评可信度门槛：低于此值不进待审（0.5~0.95，宁缺毋滥）
+      maxMemesPerChat: 2     // 每群每次复盘最多收几条梗（1~5），压住一次收十几条的情况
     }
   },
   // 用户自定义人设库（保存在配置里，可在设置页添加/选择）

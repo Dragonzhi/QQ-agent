@@ -1018,6 +1018,8 @@ function callPriorChatMessages(ctx, now, peerId) {
  * - 上限 persona.examplesMaxActive：按 createdAt 取最近 N 条（渲染侧兜底；
  *   晋升/添加侧的强制淘汰在 P1 落地）
  * - trigger 不带昵称（config 注释口径），这里原样渲染，不补称呼
+ * - note 是可选「梗解释」：有就渲染成「梗解释：」行。模型不一定认识群内黑话，
+ *   光看 trigger+good 只学得到句式、学不到「为什么这么接」，解释补的就是这层含义
  * - 通话精简路径不调用本函数（示例区在人设尾部，900 字截断本来也带不到）
  * - 坏数据逐条跳过，整段为空就不输出；一个示例至少要有一条正例，
  *   否则只教了「不要什么」却没教「要什么」，不如不收
@@ -1034,6 +1036,9 @@ function renderExamples(cfg) {
     const good = (Array.isArray(e.good) ? e.good : []).map((s) => String(s ?? '').trim()).filter(Boolean);
     if (!good.length) continue;
     const lines = [`群友：${String(e.trigger).trim()}`];
+    // note（可选）：单行渲染，换行会打乱示例块格式；空白 = 不渲染这一行
+    const note = String(e.note ?? '').replace(/\s+/g, ' ').trim();
+    if (note) lines.push(`梗解释：${note}`);
     for (const bad of (Array.isArray(e.bad) ? e.bad : [])) {
       const t = String(bad ?? '').trim();
       if (t) lines.push(`你不要：${t}`);

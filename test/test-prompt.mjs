@@ -18,6 +18,7 @@ const { MemoryStore } = await import('../src/memory.js');
 const { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, stripMentions } = await import('../src/prompt.js');
 const { segmentsToText } = await import('../src/onebot.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
+const { saveMind, clearMind } = await import('../src/mind.js');
 
 // 注入测试配置
 const cfg = structuredClone(DEFAULT_CONFIG);
@@ -84,7 +85,7 @@ const triggerEntries = store.drainUnread('group:123');
 assert.strictEqual(triggerEntries.length, 3, '触发批应是 3 条未读');
 assert.strictEqual(store.unreadCount('group:123'), 0, 'drain 后无未读');
 
-const userPrompt = buildUserPrompt({
+const userPromptArgs = {
   chatKey: 'group:123',
   kind: 'group',
   chatId: '123',
@@ -97,7 +98,8 @@ const userPrompt = buildUserPrompt({
   runSeq: 7,
   moreUnreadDuringRun: false,
   proactive: false
-});
+};
+const userPrompt = buildUserPrompt(userPromptArgs);
 
 for (const section of ['【当前时间】', '【角色设定', '【已读信息】', '【未读信息】', '【记忆】', '【可用表情包】', '【引导说明】']) {
   assert.ok(userPrompt.includes(section), `用户提示缺少段落：${section}`);
@@ -121,6 +123,20 @@ for (const banned of ['沉睡前观察', 'qq_', '[SILENT]', '【此刻状态】'
   assert.ok(header('【记忆】\n') < header('【已读信息】以下是这个会话'), '记忆应在已读信息之前（锚点前缀的核心）');
   assert.ok(header('【已读信息】以下是这个会话') < header('【未读信息】以下是'), '已读信息应在未读信息之前');
   assert.ok(header('【未读信息】以下是') < header('【当前时间】'), '未读信息应在当前时间之前');
+}
+
+// ── 2c. 心事本：有内容才注入；位置在未读信息之后、当前时间之前 ──────────────
+{
+  saveMind('group:123', '刚才想问清楚版本，憋着没问；下次可以拿价格怼回去。');
+  const withMind = buildUserPrompt(userPromptArgs);
+  assert.ok(withMind.includes('【刚才的内心】'), '有有效心事时应注入【刚才的内心】');
+  assert.ok(withMind.includes('憋着没问'), '心事正文应被带入');
+  assert.ok(withMind.indexOf('【未读信息】以下是') < withMind.indexOf('【刚才的内心】'), '心事应在未读信息之后');
+  assert.ok(withMind.indexOf('【刚才的内心】') < withMind.indexOf('【当前时间】'), '心事应在当前时间之前');
+
+  clearMind('group:123');
+  const withoutMind = buildUserPrompt(userPromptArgs);
+  assert.ok(!withoutMind.includes('【刚才的内心】'), '没有心事时不应出现该段落');
 }
 
 // ── 3. 触发批不出现在"已读信息"里（避免重复） ──
@@ -243,7 +259,7 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   const mk = (over = {}) => ({
     id: 'ex_t', status: 'active', trigger: '华莱士不敢吃',
     good: ['草 勇士', '完了 已经点了'], bad: ['注意食品安全'],
-    tags: [], source: 'manual', createdAt: 1000, usedAt: 0, ...over
+    note: '', tags: [], source: 'manual', createdAt: 1000, usedAt: 0, ...over
   });
 
   // 基线：示例为空 → 不出【回复示例】段
@@ -269,6 +285,18 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   const h = (m) => p1.indexOf(m);
   assert.ok(h('【角色设定（管理员设置') < h('【回复示例') && h('【回复示例') < h('【可用表情包】'),
     '示例段应在【角色设定】之后、【可用表情包】之前');
+
+  // note（梗解释）：有则渲染「梗解释：」行，位置在「群友：」之后、「你可以：」之前
+  cfg.persona.examples = [mk({ id: 'n', createdAt: 7, note: '华莱士=便宜但传说吃了跑肚的梗' })];
+  const p3 = build(24);
+  assert.ok(p3.includes('梗解释：华莱士=便宜但传说吃了跑肚的梗'), 'note 应渲染成「梗解释：」行');
+  const h3 = (m) => p3.indexOf(m);
+  assert.ok(h3('群友：华莱士不敢吃') < h3('梗解释：') && h3('梗解释：') < h3('你可以：草 勇士'),
+    '梗解释行应在群友行之后、回复行之前');
+  // 空白 note 不渲染（避免出现「梗解释：」空行）
+  cfg.persona.examples = [mk({ id: 'n2', createdAt: 8, note: '   ' })];
+  assert.ok(!build(25).includes('梗解释：'), 'note 为空白时不应渲染该行');
+  cfg.persona.examples = [];
 
   // 上限切片：按 createdAt 取最近 examplesMaxActive 条，最旧的被挤出
   cfg.persona.examples = [

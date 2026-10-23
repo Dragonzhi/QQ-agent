@@ -83,7 +83,7 @@ updated: 2026-10-23
 - 重启验证（2026-10-23 21:33）：Electron 实例已重启（PID 57488，旧进程 61268 强杀）；`GET /api/config` 已返回 `persona.review.minConfidence=0.72`、`maxMemesPerChat=2`，控制台 `http://127.0.0.1:3210` 就绪，OneBot（SnowLuma）连接成功。实例锁已更新为新 PID，便携 QQ 未重启（无需重新登录）。
 - 操作注意：本会话环境带 `ELECTRON_RUN_AS_NODE=1`，直接 `electron.exe` 启动会被当成普通 Node 运行并报 `cjsPreparseModuleExports` 错；启动前须 unset 该变量（本次用 `env -u ELECTRON_RUN_AS_NODE` 启动）。
 - 重启工具化（2026-10-23）：`scripts/restart-app.mjs`（入 git）+ 项目 skill `.agents/skills/qq-agent-restart/SKILL.md`。`.gitignore` 已显式放行 `.agents/skills/`（原 `skills/` 规则按目录名匹配会误伤），`isle` skill 也一并入库。以后重启直接 `node scripts/restart-app.mjs`；同日 21:40 用它把实例从 57488 换到 59712，一次通过。
-- 提交整理（2026-10-23）：拆成 `719bb30` feat(persona)（示例梗解释 + 收梗质量闸）、`c4e72ee` chore(dev)（重启脚本 + 项目 skill + `.gitignore`）两笔，本文件记录另有 docs 提交；用 hunk 级暂存把工作区里未提交的「心事本（mind）」WIP 排除在外。**尚未推送 origin**。
+- 提交整理（2026-10-23）：拆成 `719bb30` feat(persona)（示例梗解释 + 收梗质量闸）、`c4e72ee` chore(dev)（重启脚本 + 项目 skill + `.gitignore`）两笔，本文件记录另有 docs 提交；用 hunk 级暂存把工作区里未提交的「心事本（mind）」WIP 排除在外。已推送 origin（55f8d7c）。注意：在 Agent/CI shell 里推送必须带 `GCM_INTERACTIVE=never`（如 `GCM_INTERACTIVE=never git push origin main`），否则 Windows 凭据管理器会等交互，命令表面挂死；`git ls-remote` 不受影响，所以容易误判成网络问题。
 - 未验证：新提示词在真实群聊上的实际拦下比例、模型自评可信度是否靠谱；尚未跑真实复盘（旧待审数据没有 confidence/evidence，面板照常显示）。
 - 工作区仍有未提交的「心事本（mind）」改动（非本轮产生，未触碰）。
 

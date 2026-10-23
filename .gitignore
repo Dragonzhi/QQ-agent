@@ -59,4 +59,9 @@ community.key
 plugins/
 skills/
 
+# .agents/skills/ = 项目级 Agent skill（isle、qq-agent-restart 等），属于本仓库作品，要入库。
+# 上面的 skills/ 规则按目录名匹配，会连它一起忽略，这里显式放行。
+!.agents/skills/
+!.agents/skills/**
+
 .goal-baseline/

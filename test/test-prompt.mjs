@@ -346,6 +346,29 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(sys12.includes('别硬答、别装懂'), '接不上时的兜底指引应在场');
 }
 
+// ── 13. 默认沉默（2026-10-25 误插话整改：把默认值从「接话」翻成「沉默」）──
+// 背景见 src/prompt.js speakOrNot 的注释：群里两人互怼时机器人插了一句
+// 「谁骂你了 我还没开口呢」。根因之一是提示词通篇教"主动参与"。
+// 这里锁住新的默认值与"别人的局"识别，防止回归。
+{
+  const sys13 = buildSystemPrompt();
+  assert.ok(sys13.includes('默认不开口'), '【该说/不该说】应把默认值设为不开口');
+  assert.ok(sys13.includes('第一反应是"这话是跟我说的吗"'), '被叫来时的第一判断应是"是不是跟我说的"');
+  assert.ok(sys13.includes('别人的局不插话'), '应明确「别人的局不插话」规则');
+  assert.ok(sys13.includes('两个群友来回互怼/接梗'), '应点名两人互怼这一形态');
+  assert.ok(sys13.includes('合并转发里是别人的对话'), '合并转发应判为别人的对话');
+  assert.ok(sys13.includes('除非有人 @ 你或直接问你'), '别人的局要留出"被点名"的例外');
+  // 旧的反向措辞必须消失（曾经是误插话的最大推手）
+  assert.ok(!sys13.includes('即使没人 @ 你，也值得主动参与'), '不应再教"即使没人 @ 也主动参与"');
+  assert.ok(!sys13.includes('没被叫但有话题也主动参与'), '不应再教"没被叫也主动参与"');
+  assert.ok(!sys13.includes('不要因为"路过"就默认划走'), '不应再教"不要因为路过就划走"');
+  assert.ok(!sys13.includes('收到消息是一个参与机会'), '【群聊不是客服队列】的参与机会措辞应改为旁观优先');
+  assert.ok(sys13.includes('旁观机会'), '【群聊不是客服队列】应改成旁观优先');
+  // medium（默认档）不能再把"能接的就接"当默认
+  assert.ok(sys13.includes('大部分时候看戏'), 'medium 参与度应改成看戏优先');
+  assert.ok(!sys13.includes('能接的话题就接'), 'medium 不应再写"能接的话题就接"');
+}
+
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('✓ 提示词自测全部通过');

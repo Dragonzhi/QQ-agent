@@ -1,11 +1,12 @@
 # QQ-agent
 
 status: 进行中
-next: 实例已重启加载「收梗质量闸」（2026-10-23 21:40，PID 59712；重启统一用 `node scripts/restart-app.mjs`）。下一步跑一轮复盘核对「质量闸拦下」数量与待审量；仍嫌吵就把可信度门槛调高或加二次评审。MC 方向继续暂缓。
-updated: 2026-10-23
+next: 「莫名插话」整改已上线（2026-10-25 01:01 重启加载，PID 35600）：滑条 72.51→30（3 档 14.3% 随机）、participation medium→low、系统提示默认值翻成「沉默」。下一步在群里观察 1~2 天，对比整改前后的「随机命中且发言」次数（整改前 ≈20 次/天）；若变得太闷再把滑条往 40+ 抬或把参与度调回 medium。MC 方向继续暂缓。
+updated: 2026-10-25
 
 ## 待办
 
+- [ ] 【Meme·优先】验收「莫名插话」整改（2026-10-25 01:01 已重启加载）：在群里观察 1~2 天，对比整改前后的「随机命中且发言」次数（整改前群 592931715 约 20 次/天）。太闷 → 滑条往 40+ 抬或参与度调回 medium；还吵 → 先把滑条压到 20（2 档关键词）再看。统计口径：`data/sessions/*.json` 里 `contextReason` 含「随机命中」且 `sent` 非空的会话数。
 - [ ] 【Meme·优先】跑一轮复盘验证质量闸（实例已于 2026-10-23 21:33 重启并加载新代码）：核对日志里的「质量闸拦下」数量与待审条数，确认随机字符串/水回复/普通聊天不再入待审；顺手把现有待审条目按「驳回/晋升」清掉（驳回后同名不再重收）。若仍吵：把可信度门槛提到 0.8，或加一道「复审判官」二次调用。
 - [ ] 【Meme·优先】验收「梗解释」：真实跑一轮复盘确认草稿带 `note`，在面板/弹窗补写后晋升，检查该群提示词【回复示例】段出现「梗解释：」行；再用真实聊天观察接梗是否更准。
 - [ ] 核对运行实例是否已加载 `fce7c8f`（两路复盘输出预算 12000）和 `81dba96`（群梗编辑）；必要时重启。2026-10-17 的旧进程信息不能直接视为当前状态。
@@ -29,6 +30,7 @@ updated: 2026-10-23
 
 ## 已完成
 
+- [x] 【Meme】「莫名插话」整改：把默认值从「接话」翻成「沉默」（2026-10-25）：用户截图反馈「话题明明没指向它，它却莫名其妙出来说一句」。先取证：那次发言的会话记录 `data/sessions/mvmmk79g-3456c89a.json` 显示唤醒原因是 `随机命中(67%)`（滑条 72.51 = 3 档 75% 随机），触发消息「别骂我呗」`atMe=false`——没人叫它，是抽签叫它的。再回测该群近 36h 的 39 次随机命中发言，定位成三层叠加：① 水龙头太大（每条群消息独立掷骰，75% 命中 ≈ 每天 20+ 次插话，被 @ 只占 4%）；② 提示词把默认值设在「参与」那一侧（`participation=medium`「能接的话题就接」+「即使没人 @ 你也值得主动参与」+「不要因为路过就默认划走」，模型被叫来时的任务是"找一句能接的话"而不是"判断这话跟有没有关"）；③ 2 秒聚批把两人互怼整段带入，模型把自己当成对话里的第三人。修法（代码 + 配置）：`src/prompt.js` 的 `speakOrNot()` 改为「默认不开口 + 白名单例外（被@/被问、撞梗或记忆、冷场有内容）+ 别人的局不插话（两人互怼/@或引用别人/合并转发）」；`notAQueue()` 删掉「不要因为路过就默认划走」，改成「旁观机会：默认划走」；`participationText('medium')`（新建配置的默认档）从「能接的话题就接」改成「大部分时候看戏」；`src/personas.js:28` 同步去矛盾（原句「别习惯性潜水…主动参与」）。配置经 `POST /api/config` 落盘：`store.contextSliderPos` 72.51→30（3 档 14.3% 随机）、`persona.participation` medium→low，免重启即时生效。验证：`node test/test-prompt.mjs` 全过（新增第 13 节锁住新默认值、并断言旧反向措辞已消失）；`npm test` 55/64，9 项失败经 stash 对照确认为技能清单存量问题（minecraft/qqzone 等，与本改无关）。重启排障：重启前发现实例已于 00:49 静默退出（无错误日志、锁文件已释放，原因未能从日志确定）；`scripts/restart-app.mjs` 起新实例后 OneBot 连不上（SnowLuma 起在 01:01:36 但没有 `[Hook] login detected`），`POST /api/qq-portable/launch` 拉起便携 QQ 后 5 分钟内自动登录恢复（UIN 2107255986，未要求扫码）。已提交待补。
 - [x] 【工程】QQ-Agent 重启工具化（2026-10-23）：手工重启踩了两次坑（`ELECTRON_RUN_AS_NODE=1` 让 electron 退化成 Node、只杀主进程留下 SnowLuma 孤儿），于是固化成 ① 脚本 `scripts/restart-app.mjs`（读 `data/qq-agent.lock` 拿 PID → `taskkill /T /F` 停树 → 清 `ELECTRON_RUN_AS_NODE` 后拉起，自动沿用 electron/headless 方式 → 等锁换新 PID 且 `http://127.0.0.1:<server.port>/api/config` 200 → 报 OneBot 连接与 `persona.review` 阈值；支持 `--electron`/`--headless`）② 项目 skill `.agents/skills/qq-agent-restart/SKILL.md`（何时需要重启 vs 热重载、手工兜底步骤、坑清单；因 `.gitignore` 的 `skills/` 规则，该 skill 只在本机生效、不入库）。实测：57488 → 59712 一次通过，控制台 200、OneBot 已连接。已提交 `c4e72ee`。
 
 - [x] 【Meme】复盘「收梗质量闸」（2026-10-23）：真实复盘一次收 13 条群梗 + 6 条示例，多数算不上梗（随机数字、"？这啥"、"九格那个也行"、普通问答），人工筛不过来。① 样本与提示词收紧：任务一只喂「后面有群友接话」的回复（没人接的样本是垃圾示例主要来源），提示词明确「梗」定义（反复出现/固定含义/外部查不到）、给正反例、要求 `confidence` 自评与 `evidence`/`why` 自证、宁缺毋滥；② 落盘闸：`minConfidence`（默认 0.72）以下丢弃，占位符/纯数字/水回复/复读触发句丢弃，群梗无 `evidence` 丢弃，每群每次最多 `maxMemesPerChat`（默认 2）条；③ 去重：示例的 rejected 也参与去重（此前往返重收）；④ 设置页新增「可信度门槛」「每群梗上限」，两处待审行展示「依据/可信度」并加「**驳回**」按钮（驳回=rejected，不删除、参与去重）。验证：persona-review-test 6/6（含质量闸专项）、test-prompt、prompt-anchor、render-test 85、coverage-wiring 5/5；未重启实例、未真实跑复盘；已提交 `719bb30`。
@@ -74,6 +76,16 @@ updated: 2026-10-23
 - [x] 整理本文件：补齐任务清单，合并重复交接信息，更新预算说明，区分历史验证、本轮核对与未验证事项。
 
 ## 交接摘要
+
+### 2026-10-25 莫名插话整改：把默认值从「接话」翻成「沉默」（当前有效）
+
+- 用户反馈（带截图）：群里话题明明没指向机器人，它却「莫名其妙出来说一句」。截图那条是两个群友互怼（「我鸟都不鸟你」→「[表情13]」→「别骂我呗」），机器人接了句「谁骂你了 我还没开口呢」。
+- 取证：`data/sessions/mvmmk79g-3456c89a.json` 的 `contextTier=3`、`contextReason="随机命中(67%)"`，触发消息 `atMe=false`——唤醒它的是 75% 的随机抽签，不是任何人。回测该群（592931715）近 36h 的 39 次「随机命中且发言」：约 13% 属于插入别人的局，其余多数是对图片/游戏话题的正常吐槽；同时 51% 的会话醒来后 `noreply`（白烧一次 LLM 调用）。
+- 三层根因：① 滑条 72.51 = 3 档 75% 随机，且每条消息独立掷骰，产品语义变成「任何消息都可能召唤我」；② 提示词通篇教「主动参与」（`即使没人 @ 你也值得主动参与`、`没被叫但有话题也主动参与`、`不要因为"路过"就默认划走`），与人设里早已写对的规则（`personas.js:34-36`「群里不是每句话都是对你说的」）互相打架，且赢的是嗓门大的那边；③ 2 秒聚批把 A→B→A 的互怼整段带入上下文，模型把自己当对话里的第三人。
+- 修法：提示词改默认值（默认不开口 + 三条例外 + 「别人的局不插话」）+ 配置降频（滑条→30 ≈14.3% 随机、participation→low）。**没有做本地「别人的局」闸门**——回测过三个候选规则（@别人 / 引用别人 / 窗口内≤2 人且自己最近没说话），最好的一档也只能在拦 8 条里抓住 2 条目标、误伤 6 条合理回复，精度不够，强行上线会把群里正常的接梗一起杀掉。这一条留给以后有更强信号（或小模型分类器）时再做。
+- 生效状态：2026-10-25 01:01 用 `node scripts/restart-app.mjs` 重启（新 PID 35600），01:05 经 `POST /api/config` 落盘新配置；OneBot 在便携 QQ 重新登录后恢复连接（UIN 2107255986）。
+- 排障记录（两次都不是本改引起，但都撞上了）：① 重启前发现运行实例已于 00:49 静默退出——日志无错误、实例锁已释放，原因未能从日志确定，怀疑是窗口被关或进程被外部结束；② 新实例起后 OneBot 连不上（`ECONNREFUSED 127.0.0.1:3001`，SnowLuma 只有 starting/WebUI 两行、没有 `[Hook] login detected`），`POST /api/qq-portable/launch` 拉起便携 QQ 后约 5 分钟自动登录恢复，未要求扫码。
+- 未验证：新默认值在真实群聊上的实际效果（发言频次、是否变得太闷）；`participation=low` 与提示词整改可能叠加过度，若群里彻底不说话就把参与度调回 medium 或把滑条抬到 40+。工作区仍有未提交的「心事本（mind）」改动（非本轮产生，未触碰）。
 
 ### 2026-10-23 收梗质量闸：回应「明明算不上梗却总收进待审」（当前有效）
 
@@ -199,6 +211,7 @@ updated: 2026-10-23
 - 2026-10-20 · lead：MC 手感修复第二轮（用户反馋“动作一顿一顿、砍一个方块说一句话”）：① collect 批量采集（默认 8 个，15s 预算，分清“走不过去/挖不动”）、attack 连续打（自动兒剑、追不上/血少≤8 收手）、动作超时 20s→30s、bot.dig 与寻路内部 race。② 话闸：say 从每轮直发改为——玩家在说话随时可回、没人说至少慌 45s、与最近 6 句相似度≥0.33 吓掉（bigram Dice）。③ 修三个真 bug：`{"type":"goto"}` 不被识别（整步动作静默失败，一顿一顿的隐形主因）、place 因 findBlocks 调色板预检喂空 position 块崩 null distanceTo、searchFor 寻路无护罩。④ 提示词补合成账（oak_planks→crafting_table→stick，1 原木就够做工作台）+ dig {dx,dy,dz} 任意方向 + 被围住别死磕 digDown。⑤ data/config.json 的 sessionTokenCap 被设置库存成 0（无限），按设计意图恢复 100 万。验证：话闸单测 6/6；四轮端到端（真实 node 启动，沙箱里 process.execPath 是 Electron 启不动 runner）——6 轮里只发 2 句话（隔 68s，均为情境句）、2 句复读被吞；横向挖挖出石头/煤矿、place 不再崩、无循环出错。未规划：被怪围住时自动兒剑（反射层）未做；模型依然会因“不安全”拒绝合成。
 - 2026-10-21 · lead：并行开发环境搭建（工程侧）：fetch --all --prune 后确认 main=671ec01 与 origin/main 同步，创建 worktree `E:\\QQRobot\\QQ-agent-memes`（分支 feat/memes；分支与目录原先均不存在，未覆盖/未强推/未提交/未推送），主工作区保持 main 不动；worktree 的 skills/、plugins/ 以目录 junction 软链接到主工作区（14 skills + 21 plugins 可见、readdir 透传、git status 干净），data/、runtime/ 刻意不链接（实例隔离/体积与进程冲突）。另按案屿 isle 规范回写本文件。未验证：两 worktree 同跑时的热重载双触发、软链接在真实启动实例中的加载效果。同日续（minecraft 方向）：同法创建 worktree `feat/minecraft` → `E:\\QQRobot\\QQ-agent-minecraft`（分支与目录原先均不存在，主工作区保持 main）；延用约定链 skills/+plugins/（junction）、不链 data/+runtime/，但先多建了 data/runtime 两个连接，查到早班会留痕里写明“刻意不链”及理由后按约定回退（rmdir 只删重解析点，主工作区 data 43 条目/runtime/minecraft-server 完好已复核），改为复制 data/config.json 当种子。探针实测：ESM 会把 junction 规范化成主工作区真身（import.meta.url），即技能+runner 默认走主工作区的 src/*、data/*、runtime/*；`--preserve-symlinks` 可翻转。另核对掉 TASKS.md 挂着的一事：MC 事件驱动分享代码确实在当前树（share/outbox/轮询/test-send 四处依次核出），此前“不符”是核对上下文有误。未验证：worktree 真实启动（node_modules 未装）、--preserve-symlinks 模式下的实际效果。
 - 2026-10-21 · Codex：修复两个方向 skills/plugins 共享耦合，创建独立技能副本及插件分支、安装依赖，并分流方向任务与 WORKSPACE.md、登记案屿和补齐 isle Skill；环境与记录准备完成；哈希／realpath／Git 顶层检查和两次 npm ci 成功，独立机器人运行未验证，未提交／推送。
+- 2026-10-25 · DeepSeek Harness：「莫名插话」整改（用户截图反馈话题没指向它却突然接话）。取证：那次发言的会话记录 `contextReason="随机命中(67%)"`、触发消息 `atMe=false`——唤醒它的是 75% 抽签不是任何人；回测该群近 36h 39 次随机命中发言，约 13% 属插入别人的局，51% 的会话醒来后 noreply（白烧调用）。修法：`src/prompt.js` 的 `speakOrNot()`/`notAQueue()`/`participationText('medium')` 把默认值从「接话」翻成「沉默」（默认不开口 + 白名单例外 + 别人的局不插话），`src/personas.js:28` 同步去矛盾；配置滑条 72.51→30（14.3% 随机）、participation medium→low。**没做本地「别人的局」闸门**：三个候选规则（@别人/引用别人/窗口≤2 人且自己最近没说话）回测精度都不够，拦 8 条只抓住 2 条目标、误伤 6 条合理回复，留在案上等更强信号。验证 test-prompt 全过（新增第 13 节锁新默认值 + 断言旧反向措辞消失）、npm test 55/64（9 项失败经 stash 对照确认为技能清单存量问题）。重启排障：实例 00:49 静默退出（日志无错误、实例锁已释放，原因未能确定）；新实例 OneBot 连不上，`POST /api/qq-portable/launch` 拉起便携 QQ 后约 5 分钟自动登录恢复，未要求扫码。未验证真实群聊效果。
 - 2026-10-23 · DeepSeek Harness：收梗质量闸——针对真实复盘「6 示例 + 13 群梗大多算不上梗」：提示词收紧（定义/正反例/confidence/evidence/why），落盘加闸（可信度 0.72 默认、占位与纯数字、水回复、复读触发句、无 evidence、每群上限 2），示例去重纳入 rejected；设置页加「可信度门槛/每群梗上限」，待审行显示依据与可信度并加「驳回」按钮。验证 persona-review-test 6/6、test-prompt、prompt-anchor、render-test 85、coverage-wiring 5/5；同日 21:33 重启 Electron 实例（PID 57488）加载新代码，控制台 3210 与 OneBot 正常，`/api/config` 已带新阈值；21:40 又用新增的 `scripts/restart-app.mjs` + 项目 skill `qq-agent-restart` 完成一次重启（57488→59712）验证工具可用；未真实跑复盘。已提交 `719bb30` / `c4e72ee`（未推送）。
 - 2026-10-23 · DeepSeek Harness：优先级评估 + 示例库「梗解释」——按用户决定把 MC 降级暂缓、meme 先行；给 `config.persona.examples` 加可选 `note`：复盘起草生成并单行化落盘（缺省空串）、提示词渲染「梗解释：」行、capture/POST/PUT 读写、面板折行展示与添加/编辑入口（顺修编辑弹窗未回填 bad 的存量 bug）。验证 persona-review-test 4/4、test-prompt、prompt-anchor、render-test 85、coverage-wiring 5/5、coverage-http 127 过 1 失败（既有 qq-portable 环境项）；未在真实实例跑复盘、未重启、未调用模型。已提交 `719bb30`（未推送）。
 - 2026-10-22 · DeepSeek Harness：撤回并行 worktree，并同步回写本文件。核对两处 worktree 与 3 条方向分支均 0 独有提交、skills 与主仓逐文件一致、plugins 工作树无独有提交后：① 归档方向 TASKS/WORKSPACE/baseline 到 `.goal-baseline/isolation-20261021/worktrees/`；② 删除两个 worktree（约 1.2GB）及插件仓库对应工作树、5 条空分支（feat/memes、feat/minecraft、feature/voice-bridge、codex/*-plugins）；③ 本文件更新——七项梗收集待办与 MC 收尾/人设验收收回主线，next 改为单仓推进自主摸鱼 A，交接摘要新增「2026-10-22 撤回并行 worktree（当前有效）」并标注旧隔离段已撤回。环境整理完成，回到单仓 main 开发；未启动实例、未跑测试、未提交／推送。

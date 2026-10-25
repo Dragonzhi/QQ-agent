@@ -13,13 +13,14 @@ import { logger } from './logger.js';
 import { vendorOfConfig } from './model-prices.js';
 import { randInt } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
-import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError } from './llm.js';
+import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey } from './llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
 import { modelImageVerdict } from './vision-scan.js';
 import { currentProviders } from './providers.js';
 import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
+import { saveMind } from './mind.js';
 
 export class Orchestrator {
   constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null }) {
@@ -46,6 +47,12 @@ export class Orchestrator {
     this.pendingWake = new Set();      // 防抖中等待聚批的 chatKey
     this.pendingSessions = new Map();  // chatKey -> waiting sessionId（防抖期可见的“等待中”会话）
     this.verifiedWakes = new Set();    // 本轮 wake 由 onIncoming 触发判定排定的 chatKey（区别于 drain 等机械重排）
+    // ── 上下文插话判定（reply.interest-judge 能力，context-chime 插件，2026-10-25 接线）──
+    // 原生触发（@/关键词/随机）全没命中时，问一次"这句有没有我的戏份"再决定要不要开会话。
+    // chimeWakes：chatKey -> why，本轮唤醒由"判定要接"排定（会话页据此解释触发原因）；
+    // chimePending：chatKey 正在跑判定请求，避免同一群并发打多头小模型调用。
+    this.chimeWakes = new Map();
+    this.chimePending = new Set();
     this.consolidating = new Set();    // 正在整理记忆的 chatKey
     this.runningChats = new Set();     // 正在运行的 chatKey
     this.activeRuns = new Map();       // chatKey -> sessionId
@@ -192,6 +199,10 @@ export class Orchestrator {
         roll: null
       });
       if (!tierResult.shouldRespond) {
+        // 原生触发（@ / 关键词 / 随机）全没命中 —— 先问一次 reply.interest-judge
+        // "这句有没有我的戏份"（context-chime 插件提供）。判定是异步的，所以由它
+        // 接管后续的"标已读或开会话"；插件没装/被关/1 档时返回 false，代码原样往下走。
+        if (this.#tryInterestJudge(chatKey, entry)) return;
         // 不触发：这条消息立即标已读（只标这一条，不动窗口外已积压的未读——
         // 那些是上一批遗留，由兜底定时器/下一次触发处理）。
         if (entry) {
@@ -207,6 +218,113 @@ export class Orchestrator {
     // 触发：进入固定的"等待中"倒计时（不重置）。verified 标记让 wake 知道
     // 这一批是"逐条判定出过触发消息"的，批边界可以信任等待会话的起点。
     this.scheduleWake(chatKey, null, { verified: true });
+  }
+
+  /**
+   * 上下文插话判定（能力 `reply.interest-judge`，由 context-chime 插件提供）。
+   *
+   * ── 为什么需要这一层 ────────────────────────────────────────────────
+   * 原生触发只有四种：被 @ / 命中关键词 / 随机命中 / 4 档全响应。也就是说
+   * "没被叫到、但这句话其实该接"这种情况，原生**只能靠掷骰子**——而骰子
+   * 与内容无关，既会误接（插进群友之间的私聊式互怼），也会漏接。
+   * 2026-10-25 实测：该群 36 小时里 39 次"随机命中后真的说了话"，其中约
+   * 13% 属于插入别人的局；与此同时 51% 的会话醒来后判定不该说话（noreply），
+   * 白烧一次完整调用。用一次极短的小模型调用来判"有没有我的戏份"，比在
+   * 本地下任何启发式规则都准（本地规则回测精度只有 1/3，见 TASKS.md 记载）。
+   *
+   * ── 边界（刻意收紧的三条）────────────────────────────────────────────
+   *   · 只在**原生触发全没命中**时调用；1 档（仅艾特）一律不调 —— 那是用户
+   *     显式选择的"只认 @"，插话判定不该把它悄悄改掉；
+   *   · 私聊/语音通话不调（本来就恒响应，走不到这里）；
+   *   · 插件没装 / 被关 / 抛错 / 超时 → 拿不到能力或返回非 true，一律当"不接"，
+   *     回到原生的"标已读"路径 —— 不会出现"半边生效"。
+   *
+   * ── 成本 ────────────────────────────────────────────────────────────
+   * 判定请求自带同群冷却（默认 12s）、短消息跳过、每日单群上限（默认 400），
+   * 这里的 chimePending 只是额外防同一群的并发判定。
+   *
+   * @returns {boolean} true = 已接管（判定进行中，稍后自行标已读或排定唤醒）；
+   *                    false = 没接管，调用方按原生逻辑处理这条消息
+   */
+  #tryInterestJudge(chatKey, entry) {
+    // 1 档 = 仅艾特：用户显式要求"被叫才说话"，判定不得越过。
+    // ⚠️ 必须看**配置的档位**，不能看 tierResult.tier —— 原生没命中时
+    //    resolveContextTier 返回的是"命中的档位" 0，拿它判不出用户设了几档。
+    if (Number(storeConfigForChat(chatKey)?.contextTier) === 1) return false;
+    if (/^(private|call):/.test(String(chatKey))) return false;
+    if (this.chimePending.has(chatKey)) return false;
+
+    let provider = null;
+    try {
+      provider = skillManager.getCapabilityProviders('reply.interest-judge', { chatKey })[0];
+    } catch { provider = null; }
+    if (!provider || typeof provider.fn !== 'function') return false;
+
+    // 要判的那条消息：正常是刚入库的 entry；没有时取最早的一条未读兜底
+    const target = entry || (this.store.peekUnread(chatKey, 1) || [])[0] || null;
+    if (!target || !String(target.text ?? '').trim()) return false;
+
+    this.chimePending.add(chatKey);
+    // 刻意不 await：onIncoming 是同步的热路径（每条消息都会走），
+    // 判定最长 6 秒，不能把入库链路卡住。
+    this.#runInterestJudge(chatKey, target, provider.fn);
+    return true;
+  }
+
+  /** #tryInterestJudge 的异步后半段：跑判定 → 要接就排唤醒，不接就标已读。 */
+  async #runInterestJudge(chatKey, entry, judge) {
+    const [, chatId] = String(chatKey).split(':');
+    const cfg = getConfig();
+    let result = null;
+    try {
+      result = await judge({
+        chatKey,
+        kind: 'group',
+        chatId,
+        text: String(entry.text || ''),
+        entry,
+        entries: [entry],
+        // 判定要看的上下文：最近一段聊天，含机器人自己的发言 ——
+        // 判定提示词靠"我："前缀判断"我刚说过话没有，别黏人"。
+        recent: this.store.recent(chatKey, { limit: 16 }),
+        selfId: cfg.onebot?.selfId || this.onebot.selfId || '',
+        botName: cfg.persona?.botName || '',
+        selfNickname: cfg.persona?.selfNickname || this.onebot.selfNickname || '',
+        personaBrief: String(cfg.persona?.roleText || '').replace(/\s+/g, ' ').slice(0, 200),
+        // ⚠️ Key 必须解析后再传：cfg.api.apiKey 是"手动模式"的遗留字段，用户在 UI 里
+        // 选了目录提供商后它可能是空的或过期的，直接传会 401（2026-10-25 探针实测：
+        // HTTP 401 Invalid Authorization）。resolveApiKey 的优先级与聊天主链路完全一致
+        // （目录提供商 Key > 顶层 apiKey），保证判定用的 Key 和聊天用的是同一把。
+        api: { ...(cfg.api || {}), apiKey: resolveApiKey(cfg) }
+      });
+    } catch (error) {
+      logger.info('chime', `${chatKey} 插话判定异常（按"不接"处理）：${error?.message ?? error}`);
+      result = null;
+    } finally {
+      this.chimePending.delete(chatKey);
+    }
+
+    if (result && result.respond === true) {
+      // 判定期间可能已经有别的触发排上了唤醒 —— 那就让那条链路带走这条消息，
+      // 不重复排定（entry 仍是未读状态，会被那次的 drain 收进触发批）。
+      if (this.runningChats.has(chatKey) || this.pendingWake.has(chatKey)) return;
+      const why = String(result.why || '').slice(0, 40);
+      this.chimeWakes.set(chatKey, why);
+      logger.info('chime', `${chatKey} 判定要接（${Number(result.confidence) || 0}%${why ? `，${why}` : ''}）→ 排定唤醒`);
+      this.scheduleWake(chatKey, null, { verified: true });
+      return;
+    }
+
+    // 不接 / 被规则跳过 / 判定失败：与原生"未触发"完全一致 —— 标已读沉入历史，
+    // 不建会话、不调聊天模型。
+    if (result) {
+      const note = result.skipped ? `[${result.skipped}]` : (result.why ? `（${result.why}）` : '');
+      logger.info('chime', `${chatKey} 判定不接${note}`);
+    }
+    try {
+      this.store.markEntryRead(chatKey, entry.id);
+      this.emit('chat-update', chatKey);
+    } catch { /* 标已读失败不影响主流程 */ }
   }
 
   /**
@@ -384,6 +502,10 @@ export class Orchestrator {
   // ── 核心循环 ───────────────────────────────────────────────────────────
 
   async wake(chatKey, { proactive = false, waitingSessionId = null, reuseSessionId = null } = {}) {
+    // 上下文插话判定：这次唤醒是不是"判定要接"排定的？取走即清 ——
+    // 早期 return 也一并清掉，免得残留到下一次普通唤醒上把触发原因标错。
+    const chimeWhy = this.chimeWakes.get(chatKey);
+    this.chimeWakes.delete(chatKey);
     if (this.aborted) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return; }
     if (this.paused && !proactive) { if (waitingSessionId) this.#finishWaiting(waitingSessionId, 'aborted'); return; }
     if (this.runningChats.has(chatKey)) return;
@@ -564,9 +686,14 @@ export class Orchestrator {
     // 活跃期覆盖：必响应，读取条数与其余档位一致（统一 historyCount），
     // reason 标注活跃来源，会话页可解释"为什么 1 档设置却响应了"。
     const activeState = this.#activeState(chatKey);
+    // 上下文插话判定（context-chime）：这一轮是"判定要接"排定的唤醒，记为触发。
+    // 不覆盖的话，上面 resolveContextTier 会重掷一次随机档（"二次抽签"），
+    // 未命中就把原因写成"未触发"—— 会话照常跑，但会话页会解释成"没触发却跑了"。
     const effectiveTier = activeState
       ? { tier: 3, count: Math.max(0, Number(storeConfigForChat(chatKey).historyCount) || 80), reason: `活跃期（话题：${activeState.topic}）`, shouldRespond: true }
-      : tierResult;
+      : (chimeWhy !== undefined
+        ? { tier: 3, count: Math.max(0, Number(storeConfigForChat(chatKey).historyCount) || 80), reason: `上下文相关（插话判定${chimeWhy ? `：${chimeWhy}` : ''}）`, shouldRespond: true }
+        : tierResult);
 
     this.runningChats.add(chatKey);
     const seq = (this.runSeq.get(chatKey) || 0) + 1;
@@ -777,6 +904,8 @@ export class Orchestrator {
     //   ④ 按次关思考（reasoning token 在电话里就是纯延迟）
     const isVoice = /^call:/.test(String(chatKey));
     if (isVoice) logger.info('voice-latency', `${chatKey} 开始处理（触发 ${triggerEntries?.length || 0} 条）`);
+    // 心事每轮重新生成：会话对象可能被复用，别把上一轮的便签再存一遍。
+    session.mindNote = '';
     // ── 通话"发言欲"（2026-10-11 群里实测第二轮）──────────────────────
     // 真人在一群人的语音里也不会每句都接话。但它只在**明确标了群通话**时生效：
     //   ① 插件设置 groupCallQuiet 打开（1v1 打电话别开！1v1 里每句都是对你说的）；
@@ -1442,6 +1571,23 @@ export class Orchestrator {
       // 媒体消息跟随在全部 tool 结果之后（OpenAI 校验要求每个 tool_call 都有对应 tool 消息）
       messages.push(...imageUserMessages);
       // 给 UI 的简化消息流（跳过纯 tool 结果的重复展示）
+    }
+
+    // ── 心事本落盘（mind）──────────────────────────────────────────────────
+    // 主路径：finish 工具里模型主动写的 mind（质量最高，明确是"没说完的念头"）。
+    // 兜底（C）：模型没调 finish 时，取本轮最后一段没发出去的思考文本 —— 本来就
+    // 生成过、不额外花钱，只是质量粗一些。通话不走（延迟敏感、提示词另有精简路径）。
+    if (!isVoice && !session.error && getConfig().mind?.enabled !== false) {
+      let note = String(session.mindNote ?? '').trim();
+      let source = 'finish';
+      if (!note) {
+        const last = [...session.messages].reverse().find(
+          (m) => m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()
+        );
+        note = last ? last.content.trim() : '';
+        source = 'thinking';
+      }
+      if (note) saveMind(chatKey, note, source);
     }
 
     // 收尾：发过话 = done；没发 = noreply（这是正常选项）

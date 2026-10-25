@@ -79,6 +79,7 @@ updated: 2026-10-25
 - **落点**：`skills/nekowhale-stickers/{index.js,skill.json,SKILL.md,catalog.json}`（`skills/` 被 .gitignore，属本地技能，不入库）+ `test/nekowhale-stickers-test.mjs`（入库，技能未安装时跳过）。运行时产物在 `data/nekowhale-stickers/`（刷新索引、额度与已发记录、`tmp/` 待发图）。
 - **回滚方法**：`POST /api/skills/whale-memes {"enabled":true}` 即可把旧技能打开，两者互不冲突（只是别同时开，会各发各的）。
 - **关键口径**：发图只能走 `ctx.sender.sendImage`（进发送队列）；下载后校验魔数（kiriyuki 对不存在的图返回 HTML 错误页）；同会话每小时 4 张 / 每天 12 张；发过的图降权 0.15 而非硬排除。
+- **顺带发现（旧技能也中招）**：`manager.getPromptSections` 会**同时**收 `manifest.prompt.sections` 和导出的 `promptSections()`，只按 id 去重 —— 旧 `whale-memes` 两段 id 不同（`-playbook` / `-library`），所以它的提示词被塞了两份（约 1200 字冗余，实测 2322 个会话都带着）。新技能改成：行为指引只在 playbook（priority 45），动态片段只报"当前库大小 + 额度"（priority 40），不重复。
 - **验证**：单测 12/12；全链路探针「委屈」→「委屈哭哭」467ms；热重载已加载（18:42，未重启）；`/api/tools/availability` 确认旧 2 个工具"Skill 未启用"、新 3 个工具 enabled。
 - **未验证**：群里是否真的会发（这是换掉旧技能的初衷，得看真实聊天）；上游 `meme_render` 本地模板未移植。
 - **授权**：元数据 Apache-2.0、表情 CC BY-NC 4.0（非商用）；被问来源必须转述作者（B 站 可以叫我云大人 / kiriyuki.com），技能里已带 `sticker_credit` 工具。

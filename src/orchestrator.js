@@ -1423,6 +1423,30 @@ export class Orchestrator {
         markActivity('正在抢救未发出的回复…');
         this.sessions.update(session.id);
         this.emit('session-update', session.id);
+      } else if (!toolCalls.some((c) => (c?.function?.name ?? '') === 'send_message')) {
+        // 有工具调用、但这一轮没发消息 —— 正文里可能还躺着成稿。
+        // 典型形态（2026-10-25 实测）：模型写下「这不是我吗／蓝毛鲸尾女仆 特征全对上了」，
+        // 同一轮却只调了 sticker-memory__remember_image，于是那两句话哪儿也没去。
+        // 抢救到的 send_message **追加**在原调用之后，不替换 —— 原调用还要照常执行。
+        const rescued = await this.#rescueUnsentReply({
+          rawContent, triggerEntries, session, skillContext
+        });
+        if (rescued.length) {
+          toolCalls = [...toolCalls, ...rescued];
+          // 工具结果必须能对上 assistant 消息里的 tool_call id，否则下一轮请求会被
+          // OpenAI 兼容端点判为非法消息序列 —— 所以这里要和上面 inline 分支一样回填。
+          const lastInRound = messages[messages.length - 1];
+          if (lastInRound?.role === 'assistant') lastInRound.tool_calls = structuredClone(toolCalls);
+          const liveRound = this.sessions.current.get(session.id);
+          const uiRound = liveRound?.messages?.[liveRound.messages.length - 1];
+          if (uiRound?.role === 'assistant') {
+            uiRound.tool_calls = structuredClone(toolCalls);
+            uiRound.rescued = true;
+          }
+          markActivity('正在抢救未发出的回复…');
+          this.sessions.update(session.id);
+          this.emit('session-update', session.id);
+        }
       }
 
       const toolResults = [];

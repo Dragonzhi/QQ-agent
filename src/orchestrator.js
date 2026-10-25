@@ -885,7 +885,7 @@ export class Orchestrator {
    * @returns {Promise<Array>} 合成的 tool_call 数组；[] = 什么都别发
    */
   async #rescueUnsentReply({ rawContent, triggerEntries, session, skillContext }) {
-    return rescueUnsentReply({
+    const out = await rescueUnsentReply({
       text: rawContent,
       trigger: this.#triggerText(triggerEntries),
       sent: session.sent || [],
@@ -893,6 +893,15 @@ export class Orchestrator {
       cap: (name) => this.#capFirst(name, skillContext),
       log: (message) => skillManager.recordError('reply-safety', message)
     });
+    // 救援是"背地里"发生的：不打这行日志，用户只会看到"这次怎么又发出去了"，
+    // 排障的人也无从知道安全网到底有没有工作过。
+    if (out.length) {
+      let msgs = [];
+      try { msgs = JSON.parse(out[0].function.arguments)?.messages || []; } catch { /* 结构异常日志里给空 */ }
+      logger.info('reply-rescue',
+        `${session?.chatKey || ''} 正文里有成稿却没走工具，已抢救成 ${msgs.length} 条：${msgs.join(' / ').slice(0, 100)}`);
+    }
+    return out;
   }
 
   async #runAgent(session, { kind, chatId, chatKey, triggerEntries, proactive, seq, contextLimit = null, tierInfo = null, activeTopic = null }) {

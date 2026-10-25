@@ -31,6 +31,7 @@ import { registerTool, unregisterTool, unregisterToolsBySkill, getTool, listTool
 import { skillManager } from './skills/manager.js';
 import { normalizeManifest, isManifestUsable, SKILL_API_VERSION, kindOfDir } from './skills/manifest.js';
 import { skillErrorText } from './skills/errors.js';
+import { logger } from './logger.js';
 
 // ⚠️ 必须以**模块自身位置**为锚点，不能用 process.cwd()。
 // 打包/安装版里 App 文件在 <install>/resources/app/，而快捷方式的"起始位置"
@@ -117,9 +118,15 @@ function createSkillApi(skillId, permissions = []) {
     // ⚠️ 必须先 util.format(...args) 再加前缀：format 只把**第一个参数**当格式串，
     //    如果写成 console.log(前缀, ...args)，前缀占掉第一位，插件写的
     //    log('已加载（%s~%s）', a, b) 里的 %s 就永远不会被替换（打印字面 %s）。
-    log: (...args) => console.log(`[skill:${skillId}]`, format(...args)),
-    warn: (...args) => console.warn(`[skill:${skillId}]`, format(...args)),
-    error: (...args) => console.error(`[skill:${skillId}]`, format(...args)),
+    //
+    // ⚠️ 2026-10-25 修：原先只 console.log / console.warn。应用是以 detached +
+    //    stdio:'ignore' 拉起来的（见 scripts/restart-app.mjs），**stdout 直接被丢弃**,
+    //    于是所有插件的 log/warn 一进应用就人间蒸发 —— 排查「插话判定为什么老失败」
+    //    时，插件明明有 warn 说明原因，日志文件里却一个字都没有。
+    //    现在统一走 logger（同时落盘 + 控制台），插件说的话才算数。
+    log: (...args) => logger.info(`skill:${skillId}`, format(...args)),
+    warn: (...args) => logger.warn(`skill:${skillId}`, format(...args)),
+    error: (...args) => logger.warn(`skill:${skillId}`, format(...args)),
     // 只有声明了 web_fetch 权限才拿得到 fetch
     fetch: has('web_fetch')
       ? globalThis.fetch

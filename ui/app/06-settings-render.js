@@ -267,7 +267,7 @@ function renderSearchSection(c) {
   return `
     <h3 id="settings-search">搜索服务</h3>
     <div class="hint" style="margin-bottom:12px">
-      当前提供方：${prov === 'bing' ? 'Bing 网页解析' : prov === 'deepseek' ? 'DeepSeek 原生搜索' : prov === 'zhipu' ? '智谱 Web Search' : prov === 'bocha' ? '博查 AI Search' : prov === 'baidu' ? '百度千帆 AI Search' : prov === 'metaso' ? '秘塔 AI 搜索' : '自定义'}
+      当前提供方：${prov === 'hybrid' ? '混合（Bing 优先 + DeepSeek 兜底）' : prov === 'bing' ? 'Bing 网页解析' : prov === 'deepseek' ? 'DeepSeek 原生搜索' : prov === 'zhipu' ? '智谱 Web Search' : prov === 'bocha' ? '博查 AI Search' : prov === 'baidu' ? '百度千帆 AI Search' : prov === 'metaso' ? '秘塔 AI 搜索' : '自定义'}
       ${(() => {
         // 当前提供方已保存的 Key 状态（与模型 API 页同款提示口径）
         const keyState = {
@@ -278,6 +278,7 @@ function renderSearchSection(c) {
           metaso: c.webSearch?.metaso?.hasApiKey
         }[prov];
         if (prov === 'bing') return ' · 无需 API Key';
+        if (prov === 'hybrid') return ` · Bing 无需 Key；兜底用 DeepSeek ${c.webSearch?.deepseek?.hasApiKey ? '已配置' : '未配置（将不兜底）'}`;
         if (prov?.startsWith('custom:')) return '';
         return keyState ? ' · 已保存 API Key（不显示）' : ' · 未保存 API Key';
       })()}
@@ -286,6 +287,7 @@ function renderSearchSection(c) {
       <label for="cfg-websearch">联网搜索：启用 web_search / web_fetch 工具</label></div>
     <div class="field"><label>搜索提供方</label>
       <select id="cfg-searchprovider">
+        <option value="hybrid" ${prov === 'hybrid' ? 'selected' : ''}>混合（Bing 优先 + DeepSeek 兜底）</option>
         <option value="bing" ${prov === 'bing' ? 'selected' : ''}>Bing 网页解析</option>
         <option value="deepseek" ${prov === 'deepseek' ? 'selected' : ''}>DeepSeek 原生搜索</option>
         <option value="zhipu" ${prov === 'zhipu' ? 'selected' : ''}>智谱 Web Search</option>
@@ -311,7 +313,7 @@ function renderSearchSection(c) {
       </div>
     </div>
     <div class="field" id="bing-search-fields" style="${prov === 'bing' ? '' : 'display:none'}"><label>搜索地址（高级：可替换为兼容 Bing 结果格式的引擎）</label><input type="text" id="cfg-searchurl" value="${esc(c.webSearch?.searchUrl || 'https://cn.bing.com/search')}" /></div>
-    <div class="field-row" id="deepseek-search-fields" style="${prov === 'deepseek' ? '' : 'display:none'}">
+    <div class="field-row" id="deepseek-search-fields" style="${prov === 'deepseek' || prov === 'hybrid' ? '' : 'display:none'}">
       <div class="field"><label>DeepSeek 搜索 API Key（留空用环境变量 DEEPSEEK_API_KEY）</label>
         <div style="display:flex;gap:8px">
           <input type="password" id="cfg-ds-searchkey" value="${esc(c.webSearch?.deepseek?.hasApiKey ? '******' : '')}" placeholder="输入新 Key 可替换；留空保持不变" autocomplete="new-password" style="flex:1" />

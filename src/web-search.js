@@ -105,12 +105,74 @@ export async function bingSearch(query) {
   return { query, results };
 }
 
+/**
+ * ── 结果相关性守卫（混合模式用）─────────────────────────────────────────────
+ * 起因（2026-10-26）：Bing 网页解析对**多词中文**查询会静默降级 —— 把查询拆成
+ * 首字去搜。实测 "绝区零 星徽骑士EP" 连续三次都返回「绝（汉语文字）_百度百科」，
+ * 而单词 "绝区零" 完全正常。这种结果"看起来搜到了"，实际跟问题毫无关系，
+ * 模型顺着答就成了新的幻觉源。
+ *
+ * 判据：把查询切成 token（中文 bigram + 拉丁词），看前 3 条结果的标题+摘要里
+ * 命中几个。命中 0 个 = 引擎答非所问。这里**只判 0** 是有意的：阈值一抬高，
+ * "半退化但仍相关"的结果（比如搜鸣潮只回来官网）也会被赶去 fallback，
+ * 白等十几秒换来更差的体验。
+ */
+export function looksDegenerate(results, query) {
+  if (!Array.isArray(results) || !results.length) return false;   // 空结果交给上层报"没搜到"
+  const { latin, bigrams } = queryKeywords(sanitizeQuery(query));
+  const tokens = [...latin.map((s) => s.toLowerCase()), ...bigrams];
+  if (tokens.length < 2) return false;    // 单词查询没有判断意义
+  const head = results.slice(0, 3)
+    .map((r) => `${r.title || ''} ${r.snippet || ''}`.toLowerCase())
+    .join(' ');
+  return !tokens.some((t) => head.includes(t));
+}
+
+/**
+ * 混合搜索：Bing 先上（快、带链接、内容是活的），答非所问再让 DeepSeek 兜底
+ * （慢、无链接，但能给出解释与结论）。
+ *
+ * 为什么不反过来：DeepSeek 的时间锚会过期 —— 实测它的"可核实范围"停在 2026-05，
+ * 问今天的赛事比分它一律答"还没开赛"；而 Bing 抓的是实时网页，毛病只是中文多词
+ * 查询会降级。两者缺陷正好互补：实时靠网页，解释靠模型。
+ */
+async function hybridSearch(query) {
+  const cfg = getConfig().webSearch ?? {};
+  const hasDeepSeekKey = Boolean(String(cfg.deepseek?.apiKey || process.env.DEEPSEEK_API_KEY || '').trim());
+  let bingError = null;
+  try {
+    const res = await bingSearch(query);
+    if (!looksDegenerate(res.results, query)) return { ...res, provider: 'bing' };
+    // 结果跑偏但没有兜底 Key：原样返回并打标记，让模型知道这批结果不可信，
+    // 比直接报错更有用（它还能从中挑出个别相关的，或者老实说查不到）。
+    if (!hasDeepSeekKey) return { ...res, provider: 'bing', degraded: true };
+  } catch (error) {
+    bingError = error;
+    if (!hasDeepSeekKey) throw error;
+  }
+  try {
+    const res = await deepSeekSearch(query);
+    return {
+      ...res,
+      provider: 'deepseek',
+      fellBack: true,
+      ...(bingError ? { bingError: String(bingError?.message ?? bingError) } : {})
+    };
+  } catch (error) {
+    // 兜底也失败：优先抛最初的真实原因（Bing 那边），它比 deepseek 的错误更有诊断价值
+    if (bingError) throw bingError;
+    throw error;
+  }
+}
+
 /** 给工具用的统一入口：搜索 + 紧凑序列化。 */
 export async function webSearch(query) {
   const clean = sanitizeQuery(query);
   if (!clean) throw new Error('查询词为空');
   const cfg = getConfig().webSearch ?? {};
   const provider = String(cfg.provider || 'bing').toLowerCase();
+  // 混合：Bing 优先、跑偏才 fallback 到 DeepSeek（见 hybridSearch 的注释）
+  if (provider === 'hybrid') return hybridSearch(clean);
   if (provider === 'deepseek') return deepSeekSearch(clean);
   if (provider === 'zhipu') return zhipuSearch(clean);
   if (provider === 'bocha') return bochaSearch(clean);

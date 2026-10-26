@@ -642,19 +642,22 @@ function bindSettingsEvents(c) {
     const v = searchProviderSel.value;
     const fields = {
       bing: '#bing-search-fields',
+      // 混合模式的兜底就是 DeepSeek，所以切到 hybrid 时把 DeepSeek 那组字段露出来
+      hybrid: '#deepseek-search-fields',
       deepseek: '#deepseek-search-fields',
       zhipu: '#zhipu-search-fields',
       bocha: '#bocha-search-fields',
       baidu: '#baidu-search-fields',
       metaso: '#metaso-search-fields'
     };
-    for (const [provider, sel] of Object.entries(fields)) {
+    // ⚠️ 这里要按"字段组"去重再切：hybrid 和 deepseek 指向同一个字段组，
+    // 如果直接遍历按 provider===v 判断，后一个条目会把前一个刚显示的又藏起来。
+    const visible = new Set(Object.entries(fields).filter(([provider]) => provider === v).map(([, sel]) => sel));
+    for (const sel of new Set(Object.values(fields))) {
       const el = $(sel);
-      // 自定义项形如 'custom:<id>'，统一按 custom 前缀匹配
-      if (el) {
-        if (provider === v) uiShow(el, () => { el.style.display = ''; });
-        else uiHide(el, () => { el.style.display = 'none'; });
-      }
+      if (!el) continue;
+      if (visible.has(sel)) uiShow(el, () => { el.style.display = ''; });
+      else uiHide(el, () => { el.style.display = 'none'; });
     }
     const manage = $('#custom-provider-manage');
     if (manage) {

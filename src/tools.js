@@ -791,7 +791,7 @@ function registerAllTools() {
   registerTool({
     id: 'web_search',
     name: '联网搜索',
-    description: '联网搜索（Bing），返回标题/URL/摘要列表。适用：实时信息、新闻热点、网络用语/梗的含义、自己不确定的事实。可以换关键词连续搜 2~3 次；对最相关的 1~2 个结果用 web_fetch 读正文，不要只看摘要。',
+    description: '联网搜索。返回形状取决于后端 provider：①「标题/URL/摘要列表」——这时要对最相关的 1~2 条用 web_fetch 读正文；② 只有一条「DeepSeek 搜索」总结、url 为空——说明搜索在服务端完成、直接给了结论，**这时没有正文可点，直接用这段回答**，不要拿空 url 去调 web_fetch，也不要声称看过原文。适用：实时信息、新闻热点、网络用语/梗的含义、自己不确定的事实。可以换关键词连续搜 2~3 次。',
     category: 'web',
     icon: '🔍',
     requiresSearch: true,

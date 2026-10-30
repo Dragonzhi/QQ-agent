@@ -956,6 +956,21 @@ return `
     })}
 
     ${fold({
+      id: 'card-mind',
+      icon: '🫧',
+      title: '心事本',
+      sub: '把上一轮没说出口的念头带到下一轮',
+      body: `
+      <div class="checkbox-row"><input type="checkbox" id="cfg-mind" ${c.mind?.enabled !== false ? 'checked' : ''} />
+        <label for="cfg-mind">启用心事本（每轮只带一小段"没说完的想法"）</label></div>
+      <div class="field-row">
+        <div class="field"><label>有效时长（分钟）</label><input type="number" id="cfg-mind-ttl" min="1" max="240" value="${esc(Number(c.mind?.ttlMinutes ?? 30))}" /></div>
+        <div class="field"><label>字数上限</label><input type="number" id="cfg-mind-max" min="20" max="600" value="${esc(Number(c.mind?.maxChars ?? 160))}" /></div>
+      </div>
+      <div class="hint">只影响提示词注入，不会发送到群里；超过有效时长自动失效，防止旧念头误导。</div>`
+    })}
+
+    ${fold({
       id: 'card-sticker',
       icon: '😄',
       title: '表情包',

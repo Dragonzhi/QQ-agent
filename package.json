@@ -77,7 +77,8 @@
     "test:safefile": "node test/safe-fetch-file-test.mjs",
     "test:sender": "node test/sender-file-uri-test.mjs && node test/sender-send-path-test.mjs",
     "check:load": "node scripts/preload-check.mjs",
-    "test:wakesem": "node test/wake-semantics-test.mjs"
+    "test:wakesem": "node test/wake-semantics-test.mjs",
+    "test:mind": "node test/mind-test.mjs"
   },
   "dependencies": {
     "js-yaml": "^5.4.1",

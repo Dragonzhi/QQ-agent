@@ -855,7 +855,8 @@ function registerAllTools() {
       type: 'object',
       properties: {
         summary: { type: 'string', description: '一句话说明你这次的决定（只记录给管理端看，不会发送）。活跃期判断话题结束时填"话题结束"' },
-        activeTopic: { type: 'string', description: '开启活跃期时才填：用一句话概括当前聊天的话题大方向（15字内，如"周末去哪玩"）。仅在【活跃模式】未激活、而这次对话确实值得你持续参与时填写；平时不要填。' }
+        activeTopic: { type: 'string', description: '开启活跃期时才填：用一句话概括当前聊天的话题大方向（15字内，如"周末去哪玩"）。仅在【活跃模式】未激活、而这次对话确实值得你持续参与时填写；平时不要填。' },
+        mind: { type: 'string', description: '可选：如果这轮有没说出口的念头（对谁的态度/情绪变化、想问但憋着没问的话、准备下一句接的梗、工具查到但没发的结论），写 ≤120 字给自己留个便签，下一轮会带上。已经发到群里的事实不用写（存档有），长期印象不用写（记忆工具有）。没想法就省略。' }
       },
       required: ['summary']
     },
@@ -865,6 +866,9 @@ function registerAllTools() {
       // orchestrator 读取 session.activeTopic 决定是否开启/维持活跃期。
       const topic = String(args.activeTopic ?? '').trim();
       if (topic) ctx.session.activeTopic = topic.slice(0, 60);
+      // 心事本：模型主动留下的"没说完的想法"，由 orchestrator 在会话收尾时落盘。
+      const mind = String(args.mind ?? '').replace(/\s+/g, ' ').trim();
+      if (mind) ctx.session.mindNote = mind.slice(0, 300);
       return ok({ finished: true });
     }
   });

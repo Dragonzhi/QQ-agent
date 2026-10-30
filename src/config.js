@@ -260,6 +260,14 @@ export const DEFAULT_CONFIG = {
     enabled: false,
     ttlMinutes: 30   // 活跃期最长持续时间（分钟）：到期自动退出，兜住"模型忘了结束"
   },
+  // 心事本：每轮结束把"没说出口的念头/立场/悬念"留成一小段文字，
+  // 下一次运行注入【刚才的内心】。只补无状态架构丢掉的"想法"，不复用对话历史，
+  // 因此成本恒定（maxChars 硬上限），且 ttlMinutes 后自动失效防止陈旧念头误导。
+  mind: {
+    enabled: true,
+    ttlMinutes: 30,
+    maxChars: 160
+  },
   // 表情包
   sticker: {
     enabled: true,

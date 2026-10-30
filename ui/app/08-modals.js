@@ -1546,6 +1546,12 @@ async function saveConfig({ quiet = false } = {}) {
       checkIntervalMaxMs: Number(val('#cfg-pro-max', c.proactive?.checkIntervalMaxMs)) || 5400000,
       probability: Number(val('#cfg-pro-prob', c.proactive?.probability ?? 0.25)) || 0.25
     };
+    patch.mind = {
+      ...(c.mind || {}),
+      enabled: chk('#cfg-mind', c.mind?.enabled !== false),
+      ttlMinutes: Math.min(240, Math.max(1, Number(val('#cfg-mind-ttl', c.mind?.ttlMinutes ?? 30)) || 30)),
+      maxChars: Math.min(600, Math.max(20, Number(val('#cfg-mind-max', c.mind?.maxChars ?? 160)) || 160))
+    };
     patch.sticker = {
       ...(c.sticker || {}),
       enabled: chk('#cfg-sticker', !!c.sticker?.enabled),

@@ -20,7 +20,7 @@ import { currentProviders } from './providers.js';
 import { skillManager } from './skills/manager.js';
 import { getToolAvailability } from './tool-registry.js';
 import { rescueUnsentReply } from './reply-rescue.js';
-import { saveMind } from './mind.js';
+import { saveMind, resolveMind } from './mind.js';
 
 export class Orchestrator {
   constructor({ store, memory, stickers, sender, sessions, onebot, emit = null, reminders = null, videoReader = null }) {
@@ -1613,16 +1613,26 @@ export class Orchestrator {
     // 兜底（C）：模型没调 finish 时，取本轮最后一段没发出去的思考文本 —— 本来就
     // 生成过、不额外花钱，只是质量粗一些。通话不走（延迟敏感、提示词另有精简路径）。
     if (!isVoice && !session.error && getConfig().mind?.enabled !== false) {
-      let note = String(session.mindNote ?? '').trim();
-      let source = 'finish';
-      if (!note) {
+      // 主路径：finish 工具里模型主动写的 mind（质量最高，明确是"没说完的念头"）。
+      const own = String(session.mindNote ?? '').trim();
+      // 兜底（C）：模型没调 finish 时，取本轮最后一段没发出去的思考文本 —— 本来就
+      // 生成过、不额外花钱，只是质量粗一些。
+      // ⚠️ 跳过 detailed-thinking 插件插入的【深度思考】条目：那是原始推理，
+      // 存进心事本会在下一轮作为【刚才的内心】注入（英文/系统提示自述/半截句），
+      // 属于最典型的跨轮认知污染（2026-10-30 实测 mind 文件全是这种内容）。
+      let fallback = '';
+      if (!own) {
         const last = [...session.messages].reverse().find(
-          (m) => m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()
+          (m) => m && m.role === 'assistant' && !m.thinkingInjected
+            && typeof m.content === 'string' && m.content.trim()
+            && !m.content.trim().startsWith('【深度思考】')
         );
-        note = last ? last.content.trim() : '';
-        source = 'thinking';
+        fallback = last ? last.content.trim() : '';
       }
-      if (note) saveMind(chatKey, note, source);
+      // 统一质检（src/mind.js:resolveMind）：两路都不合格就不写。
+      // 用「finish」这类垃圾覆盖上一轮真实的念头，比这一轮不写更糟。
+      const picked = resolveMind({ note: own, fallback });
+      if (picked) saveMind(chatKey, picked.text, picked.source);
     }
 
     // 收尾：发过话 = done；没发 = noreply（这是正常选项）

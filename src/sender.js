@@ -5,7 +5,7 @@
 // - 发出的每一条记进 ChatStore（self=true，供下一次运行当"自己的发言"）
 import fs from 'node:fs';
 import { getConfig, DEFAULT_CONFIG } from './config.js';
-import { sleep, randInt, createSendChain, formatClockTime } from './util.js';
+import { sleep, randInt, createSendChain, formatClockTime, looksLikeToolCallText } from './util.js';
 import { mdToPlain, splitForQQ } from './md-to-plain.js';
 
 // 限频回退值统一取自 DEFAULT_CONFIG，杜绝"代码默认 80 / 回退值 8 / UI 回退 8"三处打架。
@@ -146,14 +146,22 @@ export class SendQueue {
     if (!list.length) throw new Error('消息列表为空');
     const hardSplitAt = Number(getConfig().send?.hardSplitAt) || 0;
     const parts = [];
+    const blocked = [];
     for (const m of list) {
       const plain = mdToPlain(String(m ?? ''));
       if (!plain) continue;
       // 最后防线：任何上游畸形路径漏下来的 "[object Object]" 到这儿直接拦掉，
       // 用户永远不该在 QQ 里看到这串字符。全被拦 → 下方抛"消息内容为空"回给模型。
       if (/^\[object Object\]$/.test(plain)) continue;
+      // 工具调用语法当成正文（finish{"summary":...} / <tool_call>…）：
+      // 发出去不仅群里看到乱码，还会作为"我"的发言写进【已读信息】，教模型模仿自己。
+      if (looksLikeToolCallText(plain)) { blocked.push(plain); continue; }
       if (hardSplitAt > 0 && plain.length > hardSplitAt) parts.push(...splitForQQ(plain, hardSplitAt));
       else parts.push(plain);
+    }
+    if (blocked.length) {
+      throw new Error('消息内容看起来是内部工具调用（如 finish{"summary":...}），已拦截未发送。'
+        + '想结束本轮请直接调用 finish 工具，不要把工具调用写进消息正文。');
     }
     if (!parts.length) throw new Error('消息内容为空');
 

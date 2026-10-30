@@ -93,7 +93,14 @@ const MUST_NOT = [
   '这轮就先这样。',
   '话发齐了，收工。',
   '回完了，票投给鸣潮活命。',
-  '哈哈这张脸好欠揍，继续怼回去就行了。'
+  '哈哈这张脸好欠揍，继续怼回去就行了。',
+  // ↓ 2026-10-30 提瓦特群实测：模型把工具调用写成正文，被当"成稿"抢救后刷屏
+  'finish{"summary":"接话完成"}',
+  'finish{"summary":"接了二次元皇帝关于禁言的感慨"}',
+  'send_message{"messages":["你好"]}',
+  'finish: 回应阿狗关于兑换码的疑问，调侃服务器还在加载。',
+  'finish：接话完成',
+  '["finish{\\"summary\\":\\"接话完成\\"}"]'         // JSON 数组里包着工具调用
 ];
 
 check('4. 内心戏/计划腔/工具旁白一条都不许救（错救比漏救严重）', () => {
@@ -101,6 +108,23 @@ check('4. 内心戏/计划腔/工具旁白一条都不许救（错救比漏救�
     const msgs = looseSend({ text }).messages;
     assert.equal(msgs.length, 0, `不该抢救却抽出了 ${JSON.stringify(msgs)}  ← 原文 ${JSON.stringify(text)}`);
   }
+});
+
+check('4b. 工具调用语法一律判为计划腔，且整段与单行都不许救', () => {
+  for (const text of [
+    'finish{"summary":"接话完成"}',
+    'finish: 接梗完成',
+    'finish：接梗完成',
+    'send_message{"messages":["你好"]}'
+  ]) {
+    assert.equal(isPlanningText({ text }).planning, true, `应判为计划腔：${text}`);
+    assert.deepEqual(looseSend({ text }).messages, [], `不该救：${text}`);
+  }
+  // 提到工具名但没有调用语法 → 仍然可以正常救
+  assert.equal(isPlanningText({ text: 'finish 这词我记得是工具名' }).planning, false);
+  // 多行混合：工具调用那一行必须被丢掉，正经台词照常救（整段否决不该连坐）
+  const mixed = looseSend({ text: '接梗完成\nfinish{"summary":"x"}' }).messages;
+  assert.ok(!mixed.some((m) => m.includes('finish{')), `不该把工具调用当台词：${JSON.stringify(mixed)}`);
 });
 
 check('5. isPlanningText 对空/英文/超长一律判否', () => {

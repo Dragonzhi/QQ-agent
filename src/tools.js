@@ -7,7 +7,7 @@
 // 重构说明：所有工具通过 registerTool() 注册到 tool-registry.js，
 // 支持在设置页按卡片勾选启用/禁用。
 import { getConfig } from './config.js';
-import { normalizeMessageList, unquoteJsonString } from './util.js';
+import { normalizeMessageList, unquoteJsonString, looksLikeToolCallText } from './util.js';
 import { formatStickerList } from './stickers.js';
 import { skillManager } from './skills/manager.js';
 import { validateImageUrl, safeFetchBinary, browseLockState, checkBrowseLock } from './safe-fetch.js';
@@ -481,7 +481,9 @@ function registerAllTools() {
     async execute(ctx, args) {
       const limit = Math.min(100, Math.max(1, Number(args.limit) || 30));
       const offset = Math.max(0, Number(args.offset) || 0);
-      const messages = ctx.store.recent(ctx.chatKey, { limit, offset: offset + (ctx.session.pastStateCount || 0) });
+      const messages = ctx.store.recent(ctx.chatKey, { limit, offset: offset + (ctx.session.pastStateCount || 0) })
+        // 与 buildPastState 同口径：机器人自己把工具调用写成正文的脏历史不再回给模型。
+        .filter((m) => !(m.self && looksLikeToolCallText(m.text)));
       return ok({
         count: messages.length,
         messages: messages.map((m) => ({
@@ -846,7 +848,7 @@ function registerAllTools() {
   registerTool({
     id: 'finish',
     name: '结束会话',
-    description: '明确结束本次处理（表示你看完了、决定了下一步）。看完不打算说话时调用它（summary 写一句给自己看的理由）；说完话想收尾时也可以调用。不调用也可以——直接结束文本输出同样代表结束。处于活跃期时，若判断话题已结束/偏离，也用它结束（reason 填"话题结束"）。',
+    description: '明确结束本次处理（表示你看完了、决定了下一步）。看完不打算说话时调用它（summary 写一句给自己看的理由）；说完话想收尾时也可以调用。不调用也可以——直接结束文本输出同样代表结束。处于活跃期时，若判断话题已结束/偏离，也用它结束（summary 填"话题结束"）。',
     category: 'system',
     icon: '✅',
     parameters: {

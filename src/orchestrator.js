@@ -11,7 +11,7 @@
 import { getConfig, storeConfigForChat, personaForChat } from './config.js';
 import { logger } from './logger.js';
 import { vendorOfConfig } from './model-prices.js';
-import { randInt } from './util.js';
+import { randInt, BUILTIN_TOOL_NAMES } from './util.js';
 import { buildSystemPrompt, buildUserPrompt, resolveContextTier } from './prompt.js';
 import { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError, resolveApiKey } from './llm.js';
 import { buildToolDefs, toOpenAiTools, executeTool } from './tools.js';
@@ -1357,7 +1357,9 @@ export class Orchestrator {
       const rawContent = typeof msg.content === 'string' ? msg.content : '';
       let inlineCalls = [];
       if (!toolCalls.length && rawContent) {
-        inlineCalls = parseInlineToolCalls(rawContent);
+        // 传当前可用工具 id：裸调用形态（finish{...} / finish: …）只按真实工具名解析，
+        // 避免把普通聊天里出现的英文单词误判成工具调用。
+        inlineCalls = parseInlineToolCalls(rawContent, new Set(toolDefs.map((d) => d?.id).filter(Boolean)));
         // 回复安全网（reply-safety 插件）的解析器覆盖更多书写格式，且可配置关闭。
         // **合并**而不是替换：核心解析器已覆盖标准 <tool_call> 写法，插件多认出来的
         // 那些补进来 —— 两边都不丢，且插件没启用时这段是空操作。
@@ -2300,17 +2302,64 @@ function safeParse(text) {
 //   2. <tool_call> {"name":"send_message","arguments":{...}} </tool_call>
 //   3. <tool_call> send_message \n {"messages":"..."} </tool_call>
 // 返回 [{ name, args }]；没有解析到则返回 []。
-export function parseInlineToolCalls(text) {
+export function parseInlineToolCalls(text, knownNames = null) {
+  const raw = String(text || '');
   const out = [];
   const blockRe = /<tool_call\b[^>]*>([\s\S]*?)<\/tool_call>/gi;
   let match;
-  while ((match = blockRe.exec(String(text || ''))) !== null) {
+  while ((match = blockRe.exec(raw)) !== null) {
     const block = match[1].trim();
     if (!block) continue;
     const call = parseInlineBlock(block);
     if (call) out.push(call);
   }
+  // 无包裹形态（2026-10-30 实测 step-5-preview）：模型把调用直接写成
+  //   finish{"summary":"…"} / send_message{"messages":[…]} / finish: 接梗完成
+  // 这类文本以前落进"回复安全网"被当成成稿发进群（群里出现 finish{"summary":…}）。
+  // 这里先按真实工具调用解析：finish 正常收尾、send_message 正常发送，语义本来就是这个。
+  if (!out.length) {
+    const bare = parseBareToolCall(raw.trim(), knownNames);
+    if (bare) out.push(bare);
+  }
   return out;
+}
+
+/**
+ * 解析"没有 <tool_call> 包裹"的裸工具调用文本。
+ * 只认已知工具名，且必须整条就是一次调用 —— 正常聊天不会以 "工具名{JSON}" 开头结尾。
+ *
+ * @param {string} text 整段正文（已 trim）
+ * @param {Set<string>|null} knownNames 当前可用的工具 id 集合
+ * @returns {{name:string,args:object}|null}
+ */
+function parseBareToolCall(text, knownNames) {
+  if (!text || /<tool_call\b/i.test(text)) return null;
+  const known = (name) => (knownNames instanceof Set && knownNames.has(name)) || BUILTIN_TOOL_NAMES.has(name);
+  // ① name{...} / name({...}) / name {...}
+  const m = text.match(/^([A-Za-z_][\w.-]{0,40})\s*(?:\(\s*)?(\{[\s\S]*\})(?:\s*\))?\s*$/);
+  if (m && known(m[1])) {
+    try {
+      const obj = JSON.parse(m[2]);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return { name: m[1], args: obj };
+    } catch { /* JSON 不合法就不当调用 */ }
+    return null;
+  }
+  // ② finish: 理由 / finish：理由
+  //   冒号形态语义清楚（模型就是在写"收尾理由"），只对 finish 生效；
+  //   send_message: 之类不猜参数，交给安全网/发送层拦截。
+  const c = text.match(/^finish\s*[:：]\s*([\s\S]+)$/i);
+  if (c && known('finish')) {
+    const payload = c[1].trim();
+    // 冒号后跟 JSON 对象时按参数解析（finish: {"summary":"…"}）
+    if (payload.startsWith('{')) {
+      try {
+        const obj = JSON.parse(payload);
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) return { name: 'finish', args: obj };
+      } catch { /* 退化成纯文本 summary */ }
+    }
+    return { name: 'finish', args: { summary: payload.slice(0, 300) } };
+  }
+  return null;
 }
 
 function parseInlineBlock(block) {

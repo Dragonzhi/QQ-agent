@@ -198,5 +198,49 @@ console.log('\n== 与 toFileUri 的衔接 ==');
   });
 }
 
+console.log('\n== 文本发送：工具调用语法当正文 ==');
+{
+  // 2026-10-30 实测：模型把 finish 的 JSON 写进 send_message 的 messages，
+  // 群里看到 finish{"summary":...}，之后还会被当"我"的历史反复喂给模型。
+  const sends = [];
+  const onebot = {
+    async sendText(kind, id, text) { sends.push(text); return { message_id: sends.length }; }
+  };
+  const q = new SendQueue({ onebot, store: { appendSelf() {} }, log() {} });
+
+  let err = null;
+  try { await q.sendTextBatch('group:462', ['finish{"summary":"接梗完成"}'], {}); } catch (e) { err = e; }
+  check('finish{...} 被拦截，未到协议端', () => {
+    assert.ok(err, '应该抛错');
+    assert.ok(err.message.includes('内部工具调用'), err.message);
+    assert.equal(sends.length, 0, '被拦截的消息不应发出');
+  });
+
+  // ② 冒号形态（2026-10-30 19:38 实测）：finish: 回应阿狗关于兑换码的疑问…
+  let err2 = null;
+  try { await q.sendTextBatch('group:464', ['finish: 回应阿狗关于兑换码的疑问，调侃服务器还在加载。'], {}); } catch (e) { err2 = e; }
+  check('finish: 理由 形态同样被拦截', () => {
+    assert.ok(err2, '应该抛错');
+    assert.ok(err2.message.includes('内部工具调用'), err2.message);
+  });
+
+  // ③ 全角冒号 / 带空格
+  let err3 = null;
+  try { await q.sendTextBatch('group:465', ['finish：接话完成'], {}); } catch (e) { err3 = e; }
+  check('finish：理由（全角冒号）也被拦截', () => assert.ok(err3, '应该抛错'));
+
+  await q.sendTextBatch('group:463', ['草 手滑了'], {});
+  await q.sendTextBatch('group:463', ['`finish{"summary":"x"}` 这种是工具调用写法，不是群消息'], {});
+  await q.sendTextBatch('group:463', ['时间: 8点 群里集合']);
+  await q.sendTextBatch('group:463', ['finish 这词我记得是工具名']);
+  check('正常中文聊天 / 解释性句子照常发送', () => {
+    assert.equal(sends[0], '草 手滑了');
+    assert.ok(!sends[1].includes('`'), 'Markdown 反引号应被清掉');
+    assert.equal(sends[2], '时间: 8点 群里集合', '普通「中文词: 内容」不该被误拦');
+    assert.equal(sends[3], 'finish 这词我记得是工具名', '提到工具名但没有调用语法，不该误拦');
+    assert.equal(sends.length, 4, `实际 ${sends.length} 条`);
+  });
+}
+
 console.log(bad ? `\n${bad} 项失败\n` : '\n全部通过\n');
 process.exit(bad ? 1 : 0);

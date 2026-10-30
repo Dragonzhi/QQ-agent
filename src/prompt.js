@@ -15,7 +15,7 @@ import { getConfig, personaForChat } from './config.js';
 // 这里 re-export 是为了让已经从 prompt.js 引用的代码不受影响。
 import { sliderToTier as _sliderToTier, tierToSlider as _tierToSlider, TIER_SLIDER_BANDS as _TIER_SLIDER_BANDS } from './tier-slider.js';
 export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLIDER_BANDS as TIER_SLIDER_BANDS };
-import { formatFullTime, formatShortTime } from './util.js';
+import { formatFullTime, formatShortTime, looksLikeToolCallText } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import { loadActiveMemes } from './group-memes.js';
 import { loadMind, formatMind } from './mind.js';
@@ -746,6 +746,9 @@ export function buildPastState(store, chatKey, { excludeIds = [], limit = null }
   // 拍一拍事件不进【已读信息】：它是即时召唤信号（已在触发批里出现过了），
   // 历史里堆一排"[拍一拍] X 拍了拍 Y"只会教模型把拍一拍当聊天内容复读。
   messages = messages.filter((m) => !m.isPoke);
+  // 机器人自己把工具调用语法当正文发出去的历史脏数据（如 finish{"summary":...}）：
+  // 留着会作为"我"的发言教模型模仿自己（2026-10-30 提瓦特群实测的自我强化循环）。
+  messages = messages.filter((m) => !(m.self && looksLikeToolCallText(m.text)));
   // 屏蔽名单兜底过滤：屏蔽生效前已存档的历史消息，也不能再进提示词。
   // 入口拦截只管"新消息"，这里管"老库存"。机器人自己的发言（self）不过滤。
   // 全局屏蔽（所有群+私聊）+ 按群屏蔽 都要过滤。
@@ -1348,7 +1351,7 @@ export function buildUserPrompt(ctx) {
       `「${ctx.activeTopic}」`,
       '——这是你上次开启活跃期时总结的。先判断：【未读信息】和【已读信息】的聊天是否仍围绕这个大方向（或自然衍生）？',
       '· 仍在方向上：正常接话，保持参与。',
-      '· 已偏离去别的话题 / 没人在聊了：立刻调用 finish 结束（参数 reason 填"话题结束"），回到潜水状态；不要为了延续而硬拉话题。'
+      '· 已偏离去别的话题 / 没人在聊了：立刻调用 finish 结束（参数 summary 填"话题结束"），回到潜水状态；不要为了延续而硬拉话题。'
     ].join(' '));
   }
 

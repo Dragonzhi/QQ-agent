@@ -144,6 +144,51 @@ export function normalizeMessageList(input) {
 }
 
 /**
+ * 内置工具名（用于识别"把工具调用写成正文"）。只列核心内置工具：模型漏出来的
+ * 调用几乎都是它们（finish / send_message 为主）。
+ */
+export const BUILTIN_TOOL_NAMES = new Set([
+  'finish', 'send_message', 'send_to', 'send_sticker', 'send_poke', 'send_image',
+  'list_stickers', 'get_sticker_image', 'sticker_note', 'collect_sticker',
+  'get_recent_messages', 'read_forward', 'get_active_members', 'get_chats',
+  'get_message_detail', 'get_message_images', 'web_search', 'web_fetch',
+  'memory_append', 'memory_query', 'memory_remove', 'report_feedback',
+  'set_reminder', 'list_reminders', 'cancel_reminder', 'check_holiday',
+  'search_images', 'read_video'
+]);
+
+/**
+ * 机器人把工具调用语法当成聊天正文（典型：finish{"summary":"..."}、
+ * finish: 接梗完成、<tool_call>…）。这类文本一旦发进群，不仅群里看到内部指令，
+ * 还会被写进【已读信息】教模型模仿自己 —— 必须在发送前拦掉。
+ *
+ * 只认"整条就是工具调用"的形态（句子前缀/后缀解释不算），避免误拦正常聊天。
+ * 三种实测形态（2026-10-30 step-5-preview 在提瓦特群实测）：
+ *   ① finish{"summary":"接话完成"}            —— 花括号 JSON
+ *   ② finish: 回应阿狗关于兑换码的疑问…        —— 冒号 + 纯文本理由
+ *   ③ <tool_call>…</tool_call> / {"name":…}   —— 标准内联协议残留
+ *
+ * @param {string} text
+ * @param {Set<string>} [names] 额外认可的工具名（默认内置表）
+ */
+export function looksLikeToolCallText(text, names = null) {
+  const t = String(text ?? '').trim();
+  if (!t) return false;
+  const known = (name) => (names instanceof Set && names.has(name)) || BUILTIN_TOOL_NAMES.has(name);
+  if (/<tool_call[\s>]/i.test(t)) return true;
+  // {"name":"finish","arguments":{...}}
+  if (/^\{\s*"(?:name|function|tool)"\s*:\s*"[^"]+"\s*,\s*"(?:arguments|parameters|args|input)"\s*:[\s\S]*\}\s*$/i.test(t)) return true;
+  // ① name{...} / name({...})：必须整条以配对的收尾符结束
+  //   （解释性句子 "finish{...} 是工具调用" 不以 } 收尾，不会被误拦）
+  const brace = t.match(/^([A-Za-z_][\w.-]{0,40})\s*(?:\(\s*)?(\{[\s\S]*\})(?:\s*\))?\s*$/);
+  if (brace && known(brace[1].toLowerCase())) return true;
+  // ② name: 理由 / name：理由（只认已知工具名，避免 "时间: 8点" 这类误拦）
+  const colon = t.match(/^([A-Za-z_][\w.-]{0,40})\s*[:：]\s*\S/);
+  if (colon && known(colon[1].toLowerCase())) return true;
+  return false;
+}
+
+/**
  * 触发句/梗名查重的规范化口径：trim + 连续空白折成一个空格 + 转小写。
  * 回复示例（routes.js）与群梗（persona-review.js）共用同一函数 ——
  * 两处去重口径一旦漂移，「同名不同形」的东西就会同时生效，用户看到重复注入。

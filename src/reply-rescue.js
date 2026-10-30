@@ -33,11 +33,19 @@
  * @param {Function} log
  * @returns {Promise<Array>} tool_call 数组；[] = 什么都别发
  */
+import { looksLikeToolCallText } from './util.js';
+
 export async function rescueUnsentReply({
   text, trigger = '', sent = [], api = null, cap = () => null, log = () => {}
 } = {}) {
   const body = String(text || '').trim();
   if (!body) return [];
+  // 整段就是工具调用语法（finish{"summary":…} / finish: 理由 / <tool_call>…）：
+  // 这是模型把调用写成了正文，不是要说的话。绝不能当"成稿"发出去
+  // （2026-10-30 提瓦特群实测：群里刷屏 finish{"summary":"接话完成"}）。
+  // 正常情况下 core 的内联解析已经把它转成真实调用；走到这里说明解析没覆盖到，
+  // 那就宁可沉默 —— 漏救只是少说一句，错救是内部指令发进群。
+  if (looksLikeToolCallText(body)) return [];
   const asMessages = (v) => (Array.isArray(v)
     ? v.filter((m) => typeof m === 'string' && String(m).trim())
     : []);
@@ -89,6 +97,9 @@ export async function rescueUnsentReply({
       if (r?.enabled) messages = asMessages(r.picked);
     } catch { return []; }   // 筛不了就不发（保守侧）
   }
+  // 抽出来的每一句也要过一遍：多行正文里可能只有某一行是工具调用
+  // （"接梗完成\nfinish{\"summary\":\"x\"}"），整段否决拦不住这种。
+  messages = messages.filter((m) => !looksLikeToolCallText(m));
   if (!messages.length) return [];
 
   // 合成 tool_call 交给核心统一执行：这样限频、去重、分条、存档、before-tool 守卫

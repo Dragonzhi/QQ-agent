@@ -18,6 +18,7 @@ export { _sliderToTier as sliderToTier, _tierToSlider as tierToSlider, _TIER_SLI
 import { formatFullTime, formatShortTime, looksLikeToolCallText } from './util.js';
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import { loadActiveMemes } from './group-memes.js';
+import { matchWatched, formatWatchHint } from './meme-learning.js';
 import { loadMind, formatMind } from './mind.js';
 import { skillManager } from './skills/manager.js';
 
@@ -1339,6 +1340,18 @@ export function buildUserPrompt(ctx) {
     if (newMembers.length) {
       const newMemText = ctx.memory.formatForPrompt(ctx.chatKey, { userIds: newMembers });
       if (newMemText) parts.push(`【新加入成员】以下是这轮新加入话题的群友，你对他们的印象：\n${newMemText}`);
+    }
+  }
+
+  // ── 本群新说法（doc/plans/meme-learning-upgrade.md M2）────────────────
+  // 群里反复出现、但梗库没有的说法：**只在未读消息里真的提到时**才提示，
+  // 否则每轮都塞等于每轮唠叨 + 白烧 token。放在未读之后的动态区，
+  // 不打断前面的缓存前缀（心事本/当前时间同样在这一区）。
+  if (String(ctx.chatKey || '').startsWith('group:')) {
+    const unreadText = (ctx.triggerEntries || []).map((m) => String(m?.text ?? '')).join('\n').trim();
+    if (unreadText) {
+      const watchHint = formatWatchHint(matchWatched(ctx.chatKey, unreadText));
+      if (watchHint) parts.push(watchHint);
     }
   }
 

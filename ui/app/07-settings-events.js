@@ -132,15 +132,18 @@ function renderPersonaExamplesPanel() {
     })
     .filter((c) => c.visible.length);
   const memeRow = (m) => {
-    // 待审梗显示模型自证（依据 + 可信度）：人工判断值不值得晋升
+    // 待审梗显示模型自证（依据 + 可信度）；出现次数对生效梗也有意义，所以两边都显示
+    // （频次信号见 doc/plans/meme-learning-upgrade.md M1）
     const evidence = String(m.evidence || '').trim();
     const conf = Number(m.confidence);
+    const cnt = Number(m.count);
     const meta = [
+      Number.isFinite(cnt) && cnt > 0 ? `出现 ${cnt} 次` : '',
       evidence ? `依据：${evidence}` : '',
       Number.isFinite(conf) && conf > 0 ? `可信 ${conf}` : ''
     ].filter(Boolean).join(' · ');
     return `
-    <div class="pe-row${meta && m.status !== 'active' ? ' pe-row-has-note' : ''}" data-meme-id="${esc(m.id)}">
+    <div class="pe-row${meta ? ' pe-row-has-note' : ''}" data-meme-id="${esc(m.id)}">
       <span class="pe-source" title="状态：${esc(m.status || '未知')}">${esc(MEME_STATUS_LABEL[m.status] || m.status || '未知')}</span>
       <span class="pe-trigger" title="${esc(m.name)}">${esc(m.name)}</span>
       <span class="pe-good" title="${esc(m.meaning)}">${esc(m.meaning)}${m.example ? `（例：${esc(m.example)}）` : ''}</span>
@@ -152,7 +155,7 @@ function renderPersonaExamplesPanel() {
         <button type="button" class="btn btn-small pe-meme-edit" title="编辑梗名/含义/例句（不改变状态）">编辑</button>
         <button type="button" class="btn btn-small btn-danger pe-meme-del">删除</button>
       </span>
-      ${meta && m.status !== 'active' ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}
+      ${meta ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}
     </div>`;
   };
   const memeGroup = (chat) => `

@@ -14,6 +14,12 @@ import { DATA_DIR, getConfig, updateConfig } from './config.js';
 import { chatCompletion, addUsage, emptyUsage } from './llm.js';
 import { todayKey, normTrigger } from './util.js';   // todayKey 与 sessions.js 的 localDayKey 同一算法
 import { loadMemes, saveMemes } from './group-memes.js';
+import {
+  MIN_DAY_OCCURRENCES, EXISTING_NAMES_MAX,
+  countOccurrences, accumulateMemeSignals, applyMemeUpdates, nextInferenceThreshold,
+  buildWatchTerms, mergeWatchTerms
+} from './meme-learning.js';
+import { loadUserAdded } from './meme-candidates.js';
 
 // 防重启后同一天重跑：lastRunDayKey 持久化在数据目录（与 usage-today.json 同级）
 const STATE_FILE = path.join(DATA_DIR, 'persona-review-state.json');
@@ -176,7 +182,9 @@ function collectGroups(store, now) {
       totalChars += len;
     }
     const text = msgs.map((m) => String(m.text ?? '').trim()).filter(Boolean).join('\n').slice(-MEME_SAMPLE_CHARS);
-    if (samples.length || text) groups.push({ chatKey, chatId, samples, text });
+    // messages 保留原始消息数组：群梗任务要用它统计"某个说法今天出现几次"、
+    // 收集证据消息 id（doc/plans/meme-learning-upgrade.md §3）。只在内存里多留一份引用。
+    if (samples.length || text) groups.push({ chatKey, chatId, samples, text, messages: msgs });
   }
   return groups;
 }
@@ -219,8 +227,14 @@ function validateDraftedExamples(rawList, existingExamples, maxDrafts, now, minC
   return { drafts, dropped };
 }
 
-/** 任务二：单群梗校验。返回 { fresh, dropped }。 */
-function validateMemes(rawList, existing, now, { maxPerChat = 2, minConfidence = DEFAULT_MIN_CONFIDENCE } = {}) {
+/**
+ * 任务二：单群梗校验。返回 { fresh, dropped }。
+ *
+ * 2026-10-31（doc/plans/meme-learning-upgrade.md M1）：加频次闸 —— 候选必须在
+ * **当天的群聊**里被非 self 消息提到 ≥ MIN_DAY_OCCURRENCES 次才收，并把出现次数
+ * 与证据消息 id 一起落盘。一次性玩笑在这一步就被拦下，不再指望人审时肉眼判断。
+ */
+function validateMemes(rawList, existing, now, { maxPerChat = 2, minConfidence = DEFAULT_MIN_CONFIDENCE, messages = [] } = {}) {
   // 去重：任何 status 都挡（rejected 的也不再重收）
   const seen = new Set((Array.isArray(existing) ? existing : [])
     .map((m) => normTrigger(m?.name)).filter(Boolean));
@@ -240,11 +254,19 @@ function validateMemes(rawList, existing, now, { maxPerChat = 2, minConfidence =
     if (evidence.length < 4) { dropped++; continue; }
     const norm = normTrigger(name);
     if (!norm || seen.has(norm)) { dropped++; continue; }
+    // 频次闸：只数非 self 消息，每条消息最多计 1 次；aliases 也算命中
+    const occ = [...countOccurrences(messages, [{
+      name,
+      aliases: Array.isArray(item?.aliases) ? item.aliases : []
+    }]).values()][0];
+    const dayCount = occ?.count || 0;
+    if (dayCount < MIN_DAY_OCCURRENCES) { dropped++; continue; }
     seen.add(norm);
     const example = oneLine(item?.example, 120);
     fresh.push({
       id: newMemeId(), name, meaning, example, evidence,
-      confidence: Number(confidence.toFixed(2)), status: 'pending', source: 'review', createdAt: now
+      confidence: Number(confidence.toFixed(2)), status: 'pending', source: 'review', createdAt: now,
+      count: dayCount, lastSeenAt: now, evidenceMids: (occ?.mids || []).slice(-3), inferredCount: 0
     });
   }
   return { fresh, dropped };
@@ -256,7 +278,7 @@ function validateMemes(rawList, existing, now, { maxPerChat = 2, minConfidence =
  * 返回 { examplesDrafted, examplesDropped, memesDrafted, memesDropped, chatsScanned, errors }。
  */
 export async function runReviewOnce({ log = () => {}, store, sessions, llmCall = chatCompletion, now = Date.now() } = {}) {
-  const summary = { examplesDrafted: 0, examplesDropped: 0, memesDrafted: 0, memesDropped: 0, chatsScanned: 0, errors: [] };
+  const summary = { examplesDrafted: 0, examplesDropped: 0, memesDrafted: 0, memesDropped: 0, memesRefined: 0, watchAdded: 0, chatsScanned: 0, errors: [] };
   const note = (what, error) => {
     const msg = `${what}：${String(error?.message ?? error)}`;
     summary.errors.push(msg);
@@ -341,9 +363,23 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
     // 选了逐群调用而不是批量返回：把多群塞进一个 JSON 里让弱模型对错群号
     // 的风险，比多花几次调用的成本更伤（梗挂错群直接违反 per-chat 隔离）。
     if (review.groupMemes !== false) {
+      // 网络梗库的标题（自学习文件）：未知词观察表要避开它们，别把"已经认识的梗"当新词提醒
+      let netTitles = [];
+      try { netTitles = loadUserAdded().map((e) => String(e?.title ?? '').trim()).filter(Boolean); } catch { /* 读不到就不避 */ }
       for (const g of groups) {
         if (!g.text) continue;
         try {
+          const msgs = Array.isArray(g.messages) ? g.messages : [];
+          const { memes: existing } = loadMemes(g.chatKey);
+          // ① 先把今天的出现次数/证据消息 id 累计到已有条目上（纯本地，零 LLM 成本）
+          const { entries: signaled, changed: signalsChanged } = accumulateMemeSignals(existing, msgs, now);
+          // ② 越过 8/25/100 阈值、且仍是 pending 的条目：允许这次调用顺手修正含义
+          //    （active 是人工审定过的，永不自动改）
+          const refineList = signaled
+            .filter((m) => m && m.status === 'pending' && nextInferenceThreshold(m.inferredCount, m.count))
+            .slice(0, 5);
+          const refineLines = refineList.map((m) => `- ${m.name}（已出现 ${Number(m.count) || 0} 次；现解释：${oneLine(m.meaning, 80)}）`);
+          const knownNames = signaled.map((m) => String(m?.name ?? '').trim()).filter(Boolean).slice(0, EXISTING_NAMES_MAX);
           const resp = await llmCall({
             messages: [
               { role: 'system', content: '你是数据整理员。只输出一个 JSON 对象，不要输出任何解释文字。' },
@@ -351,17 +387,23 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
                 role: 'user',
                 content: [
                   `下面是一个 QQ 群（群号 ${g.chatId}）今天的聊天记录。`,
-                  '任务：只找出这个群真正在用的「群内自产梗」——群里反复出现、有固定说法和含义、外部搜索引擎查不到：内部黑话、群友绰号、共同经历的事件。',
+                  '任务一：只找出这个群真正在用的「群内自产梗」——群里反复出现、有固定说法和含义、外部搜索引擎查不到：内部黑话、群友绰号、共同经历的事件。',
                   '必须同时满足：① 记录里出现 2 次以上，或能看出群体共同使用/沿用；② 有稳定含义或用法，不是一次性玩笑；③ 新群友不看解释会听不懂。',
                   '不要收：普通聊天/吐槽/事实问答；一次性的谐音玩笑；通用网络梗（外部能查到）；纯 @ 称呼或完整昵称；随机字符串/数字/链接；一个人随口说的一句。',
-                  '宁缺毋滥：每群最多 ' + maxMemesPerChat + ' 条，没有就输出 {"memes":[]}。',
+                  '宁缺毋滥：每群最多 ' + maxMemesPerChat + ' 条，没有就输出空数组。',
                   '每条给 evidence（记录里支持它是梗的原话或出现次数）和 confidence（0~1，低于 ' + minConfidence + ' 的不要输出）。',
                   '正例：群内海南话黑话「胶固」——多次出现、有固定含义、外部查不到。反例：「九格物品栏」只是一次普通游戏讨论，没有内部含义，不要收。',
+                  '任务二（updates）：如果下面「可修正的梗」在今天的记录里能看出更准确的含义，给出修正；没有把握就别给，不要借机发明新梗。',
+                  '任务三（unknown）：列出记录里反复出现、但你看不懂或不确定含义的说法（可能是不认识的新词/黑话/网络梗）。只列词 + 出现证据，不要硬猜含义。',
+                  refineLines.length ? ['可修正的梗（只在这些里选）：', ...refineLines].join('\n') : '',
+                  knownNames.length ? `本群已收录的梗（不要重复提）：${knownNames.join('、')}` : '',
                   '只输出 JSON，格式：',
-                  '{"memes":[{"name":"梗名","meaning":"含义解释","example":"群里实际用法的原话","evidence":"凭什么判定它是群梗","confidence":0.8}]}',
+                  '{"memes":[{"name":"梗名","meaning":"含义解释","example":"群里实际用法的原话","evidence":"凭什么判定它是群梗","confidence":0.8}],' +
+                    '"updates":[{"name":"已有的梗名","meaning":"修正后的含义","confidence":0.8}],' +
+                    '"unknown":[{"term":"不确定的说法","evidence":"在哪句里反复出现"}]}',
                   '',
                   g.text
-                ].join('\n')
+                ].filter(Boolean).join('\n')
               }
             ],
             temperature: 0.4,
@@ -375,11 +417,25 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
             note(`群 ${g.chatId} 群梗收集`, new Error(`模型输出不是可解析的 JSON，已丢弃（finishReason=${resp?.finishReason || '?'}、正文 ${replyText(resp).length} 字）`));
             continue;
           }
-          const { memes: existing } = loadMemes(g.chatKey);
-          const { fresh, dropped } = validateMemes(parsed.memes, existing, now, { maxPerChat: maxMemesPerChat, minConfidence });
+          // ③ 新候选：频次闸（≥3 次/日）+ 原质量闸，落盘时带 count/evidenceMids
+          const { fresh, dropped } = validateMemes(parsed.memes, signaled, now, { maxPerChat: maxMemesPerChat, minConfidence, messages: msgs });
           summary.memesDropped += dropped;
-          if (fresh.length) {
-            saveMemes(g.chatKey, [...existing, ...fresh]);
+          // ④ 已有 pending 的含义修正（只动越过阈值的；active/rejected 不碰）
+          const refined = applyMemeUpdates(signaled, parsed.updates, { minConfidence, now });
+          summary.memesDropped += refined.dropped;
+          summary.memesRefined = (summary.memesRefined || 0) + refined.applied;
+          // ⑤ 未知词观察表：同一份输出，不额外花 token；写 data/meme-watch/<gid>.json
+          const watchTerms = buildWatchTerms(parsed.unknown, {
+            knownNames: [...signaled.map((m) => m?.name), ...fresh.map((m) => m.name), ...netTitles],
+            messages: msgs,
+            now
+          });
+          if (watchTerms.length) {
+            mergeWatchTerms(g.chatKey, watchTerms, now);
+            summary.watchAdded = (summary.watchAdded || 0) + watchTerms.length;
+          }
+          if (fresh.length || refined.applied || signalsChanged) {
+            saveMemes(g.chatKey, [...refined.entries, ...fresh]);
             summary.memesDrafted += fresh.length;
           }
         } catch (error) {
@@ -391,7 +447,8 @@ export async function runReviewOnce({ log = () => {}, store, sessions, llmCall =
     note('复盘异常', error);
   }
   log(`[人设复盘] 完成：示例 ${summary.examplesDrafted} 条（质量闸拦下 ${summary.examplesDropped}）、` +
-    `群梗 ${summary.memesDrafted} 条（质量闸拦下 ${summary.memesDropped}）、扫描 ${summary.chatsScanned} 个会话` +
+    `群梗 ${summary.memesDrafted} 条（质量闸拦下 ${summary.memesDropped}）、修正 ${summary.memesRefined} 条、` +
+    `观察词 ${summary.watchAdded} 个、扫描 ${summary.chatsScanned} 个会话` +
     (summary.errors.length ? `（${summary.errors.length} 个错误）` : ''));
   return summary;
 }

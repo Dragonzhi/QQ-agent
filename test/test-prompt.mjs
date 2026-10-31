@@ -337,6 +337,32 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(!build2('private:1').includes('【群内梗'), '私聊不应出现群梗段');
 }
 
+// ── 11b. 本群新说法（观察词命中才注入，doc/plans/meme-learning-upgrade.md M2）──
+{
+  const { saveWatch } = await import('../src/meme-learning.js');
+  const nowMs = Date.now();
+  const buildWith = (chatKey, texts) => buildUserPrompt({
+    chatKey, kind: chatKey.split(':')[0], chatId: String(chatKey.split(':')[1] ?? ''),
+    chatName: '测试群',
+    triggerEntries: texts.map((t, i) => ({ id: `t${i}`, text: t, senderId: 'u1', senderName: '群友1' })),
+    store, memory,
+    stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],
+    selfNickname: '测试机', runSeq: 41, moreUnreadDuringRun: false, proactive: false
+  });
+  saveWatch('group:123', [{ term: '尊嘟假嘟', count: 5, firstSeenAt: nowMs, lastSeenAt: nowMs, samples: [] }], nowMs);
+  const hit = buildWith('group:123', ['这图尊嘟 假嘟 太抽象了']);
+  assert.ok(hit.includes('【本群新说法'), '未读命中观察词时应注入提示段');
+  assert.ok(hit.includes('尊嘟假嘟（5 次）'), '提示段应带词与出现次数');
+  assert.ok(hit.indexOf('【未读信息】') < hit.indexOf('【本群新说法'), '提示段应在【未读信息】之后（动态区，不打断缓存前缀）');
+  assert.ok(hit.indexOf('【本群新说法') < hit.indexOf('【当前时间】'), '提示段应在【当前时间】之前');
+  const miss = buildWith('group:123', ['今天吃什么']);
+  assert.ok(!miss.includes('【本群新说法'), '未命中时不注入（不唠叨）');
+  const noUnread = buildWith('group:123', []);
+  assert.ok(!noUnread.includes('【本群新说法'), '没有未读（主动机会）时不注入');
+  const priv = buildWith('private:9', ['尊嘟假嘟']);
+  assert.ok(!priv.includes('【本群新说法'), '私聊不注入');
+}
+
 // ── 12. 接话要有内容（核心规则：空转短句禁令，配合话题热身卡）────────────
 {
   const sys12 = buildSystemPrompt();

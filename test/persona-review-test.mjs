@@ -15,7 +15,7 @@ const { createChecker } = await import('./_harness.mjs');
 const t = createChecker('每晚复盘');
 const { runReviewOnce } = await import('../src/persona-review.js');
 const { getConfig } = await import('../src/config.js');
-const { loadMemes } = await import('../src/group-memes.js');
+const { loadMemes, saveMemes } = await import('../src/group-memes.js');
 
 const NOW = Date.now();
 const GROUP = 'group:900001';
@@ -28,13 +28,29 @@ function fakeStore(chats) {
     recent: (chatKey, { limit = 80 } = {}) => (chats[chatKey] || []).slice(-limit)
   };
 }
+// 消息计数（doc/plans/meme-learning-upgrade.md M1）：候选要在当天非 self 消息里
+// 出现 ≥3 次才收，所以样本里给几个说法铺够次数；mid 用于断言 evidenceMids 落盘。
 const CHATS = {
   [GROUP]: [
-    { id: 1, ts: NOW - 5000, self: false, text: '终末地今天更新了' },
-    { id: 2, ts: NOW - 4000, self: true, text: '锄大地锄吐了' },
-    { id: 3, ts: NOW - 3000, self: false, text: '哈哈哈哈' },
-    { id: 4, ts: NOW - 2000, self: true, text: '你倒是挺勤快' },
-    { id: 5, ts: NOW - 1000, self: true, text: '传送点没开更折磨' }
+    // 甲/乙/丙梗各 3 次（供每群上限/修正用例）；低频梗只有 2 次（供频次闸用例）
+    { id: 101, mid: 9001, ts: NOW - 60000, self: false, text: '甲梗 又来了' },
+    { id: 102, mid: 9002, ts: NOW - 59000, self: false, text: '甲梗 真的' },
+    { id: 103, mid: 9003, ts: NOW - 58000, self: false, text: '甲梗 笑死' },
+    { id: 104, mid: 9004, ts: NOW - 57000, self: false, text: '乙梗 是吧' },
+    { id: 105, mid: 9005, ts: NOW - 56000, self: false, text: '乙梗 哈哈' },
+    { id: 106, mid: 9006, ts: NOW - 55000, self: false, text: '乙梗 行' },
+    { id: 107, mid: 9007, ts: NOW - 54000, self: false, text: '丙梗 ？' },
+    { id: 108, mid: 9008, ts: NOW - 53000, self: false, text: '丙梗 别' },
+    { id: 109, mid: 9009, ts: NOW - 52000, self: false, text: '丙梗 好' },
+    { id: 110, mid: 9010, ts: NOW - 51000, self: false, text: '低频梗出现过' },
+    { id: 111, mid: 9011, ts: NOW - 50000, self: false, text: '低频梗又来了' },
+    { id: 1, mid: 1001, ts: NOW - 5000, self: false, text: '终末地今天更新了' },
+    { id: 2, mid: 1002, ts: NOW - 4500, self: false, text: '锄大地是真折磨' },
+    { id: 3, mid: 1003, ts: NOW - 4000, self: true, text: '锄大地锄吐了' },
+    { id: 4, mid: 1004, ts: NOW - 3500, self: false, text: '明天还锄大地吗' },
+    { id: 5, mid: 1005, ts: NOW - 3000, self: false, text: '锄大地 我服了' },
+    { id: 6, mid: 1006, ts: NOW - 2000, self: true, text: '你倒是挺勤快' },
+    { id: 7, mid: 1007, ts: NOW - 1000, self: true, text: '传送点没开更折磨' }
   ]
 };
 
@@ -118,6 +134,10 @@ await t.check('写进 data/group-memes/<gid>.json 且状态为 pending', async (
   assert.strictEqual(memes[0].name, '锄大地');
   assert.strictEqual(memes[0].evidence, '当天出现 3 次，群友互相复述', 'evidence 随梗落盘（面板展示）');
   assert.strictEqual(memes[0].confidence, 0.9);
+  // 频次信号（M1）：当天非 self 出现 3 次 + 证据消息 id
+  assert.strictEqual(memes[0].count, 3, '频次闸应记下当天非 self 出现次数');
+  assert.deepStrictEqual(memes[0].evidenceMids, ['1002', '1004', '1005'], '证据消息 id 应按出现顺序落盘');
+  assert.strictEqual(memes[0].inferredCount, 0, '新候选的修正基线为 0');
 });
 
 // ── ③ 弱模型输出容错 ────────────────────────────────────────────────────
@@ -187,6 +207,87 @@ await t.check('群梗：每群单次上限 2 条，无依据的候选拦下', as
   const { memes } = loadMemes(GROUP);
   assert.ok(memes.every((m) => m.evidence), '落盘的群梗都必须带 evidence');
 });
+
+// ── ⑥ 频次闸（M1）──────────────────────────────────────────────────────
+t.section('⑥ 频次闸：当天非 self 出现不足 3 次的候选不收');
+{
+  const resetGroupMemes = (list = []) => {
+    try { fs.rmSync(path.join(dataDir, 'group-memes'), { recursive: true, force: true }); } catch { /* 首次无文件 */ }
+    if (list.length) saveMemes(GROUP, list);
+  };
+  const groupLlm = (payload) => async ({ messages }) => {
+    const user = String((messages || []).find((m) => m.role === 'user')?.content ?? '');
+    return okResp(user.includes('群内自产梗') ? JSON.stringify(payload) : JSON.stringify({ examples: [] }));
+  };
+  await t.check('低频梗（2 次）被拦，够 3 次的正常收，并带 count/evidenceMids', async () => {
+    resetGroupMemes();
+    const r = await runReviewOnce({
+      store: fakeStore(CHATS), now: NOW,
+      llmCall: groupLlm({ memes: [
+        { name: '低频梗', meaning: '只出现两次的说法', evidence: '今天出现两次', confidence: 0.9 },
+        { name: '甲梗', meaning: '群内黑话甲', evidence: '出现三次', confidence: 0.9 }
+      ] })
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.strictEqual(r.memesDrafted, 1, '只有够 3 次的甲梗该进待审');
+    assert.ok(r.memesDropped >= 1, '低频梗应被频次闸拦下');
+    const { memes } = loadMemes(GROUP);
+    assert.deepStrictEqual(memes.map((m) => m.name), ['甲梗']);
+    assert.strictEqual(memes[0].count, 3);
+    assert.strictEqual(memes[0].evidenceMids.length, 3);
+  });
+
+  // ── ⑦ 渐进修正（M1）──────────────────────────────────────────────────
+  t.section('⑦ 渐进修正：只改 pending，active 的人工审定解释不动');
+  await t.check('pending 越过 8 次阈值被修正；active 即使越阈值也忽略', async () => {
+    resetGroupMemes([
+      { id: 'gm_old', name: '乙梗', meaning: '旧解释', status: 'pending', count: 5, inferredCount: 0, evidence: '此前出现', confidence: 0.9, createdAt: 1 },
+      { id: 'gm_human', name: '丙梗', meaning: '人工审定解释', status: 'active', count: 5, inferredCount: 0, evidence: '此前出现', confidence: 0.9, createdAt: 1 }
+    ]);
+    const r = await runReviewOnce({
+      store: fakeStore(CHATS), now: NOW,
+      llmCall: groupLlm({ memes: [], updates: [
+        { name: '乙梗', meaning: '结合今天上下文修正后的解释', confidence: 0.9 },
+        { name: '丙梗', meaning: '模型想改的', confidence: 0.9 }
+      ] })
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.strictEqual(r.memesRefined, 1, '只该有 1 条 pending 被修正');
+    const { memes } = loadMemes(GROUP);
+    const yi = memes.find((m) => m.name === '乙梗');
+    assert.strictEqual(yi.meaning, '结合今天上下文修正后的解释', 'pending 的含义应被修正');
+    assert.strictEqual(yi.count, 8, '5（历史）+ 3（今天）= 8');
+    assert.strictEqual(yi.inferredCount, 8, '修正后记录推断基线，避免重复修正');
+    assert.strictEqual(yi.status, 'pending', '修正不改变状态');
+    const bing = memes.find((m) => m.name === '丙梗');
+    assert.strictEqual(bing.meaning, '人工审定解释', 'active 的人工审定解释不允许夜间漂移');
+  });
+
+  // ── ⑧ 未知词观察表（M2）──────────────────────────────────────────────
+  t.section('⑧ 未知词观察表：够 2 次且不在已收录名单才入表');
+  await t.check('低频梗入观察表；已收录的百度词与没出现的词不入；文件落盘', async () => {
+    resetGroupMemes([
+      { id: 'gm_known', name: '甲梗', meaning: '已知的群梗', status: 'pending', evidence: '此前出现', confidence: 0.9, createdAt: 1 }
+    ]);
+    const r = await runReviewOnce({
+      store: fakeStore(CHATS), now: NOW,
+      llmCall: groupLlm({ memes: [], unknown: [
+        { term: '低频梗', evidence: '今天反复出现' },
+        { term: '甲梗', evidence: '已收录的梗' },
+        { term: '从没出现过的词', evidence: '无' }
+      ] })
+    });
+    assert.deepStrictEqual(r.errors, []);
+    assert.strictEqual(r.watchAdded, 1, '只有低频梗该进观察表');
+    const watchFile = path.join(dataDir, 'meme-watch', '900001.json');
+    assert.ok(fs.existsSync(watchFile), '观察表应写在 data/meme-watch/<gid>.json');
+    const watch = JSON.parse(fs.readFileSync(watchFile, 'utf8'));
+    assert.strictEqual(watch.terms.length, 1);
+    assert.strictEqual(watch.terms[0].term, '低频梗');
+    assert.strictEqual(watch.terms[0].count, 2, '观察词要记当天出现次数');
+    assert.ok(Array.isArray(watch.terms[0].samples) && watch.terms[0].samples.length <= 2, '样例最多 2 条');
+  });
+}
 
 try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 t.finish();

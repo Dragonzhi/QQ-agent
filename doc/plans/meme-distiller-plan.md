@@ -169,4 +169,8 @@ data/hot-trends.json →  提取"正在被大家玩"的梗候选   →   candida
 - `node test/render-test.mjs` → 85/85；`node test/tools-skill-audit.mjs` → 新插件清单完整 ✓（存量 9 项失败无关）。
 - 真实蒸馏一次：20 条热榜 → 1 条候选「义父」（别名 义父义母/愿拜为义父，evidence 引热榜简介原文，
   confidence 0.72），停在 `data/meme-distiller/candidates.json` 待审。
-- 未验证：实例内定时触发（应用当时未运行）、晋升后群里 `查网络梗` 的实际命中（需人工点晋升）。
+- **实例部署验证（2026-10-31 22:22）**：`node scripts/restart-app.mjs` 重启（PID 41796，控制台 200、OneBot 已连接）；
+  日志「✅ 加载成功：梗候选蒸馏」+「梗候选蒸馏已就绪｜每天 7:00（北京时间）」；
+  `GET /api/meme-candidates` 200（返回候选 + 插件状态）、`POST /api/meme-candidates/distill` 实跑成功：
+  25 条热点 → 2 条新候选（「丧病」0.8、「传统艺能」0.85），加此前「义父」0.72，待审 3 条，evidence 均引热榜原文。
+- 未验证：每天 7 点的定时器自动触发（次日观察日志）；晋升后群里 `查网络梗` 的实际命中（需人工点晋升）。

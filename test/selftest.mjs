@@ -290,6 +290,13 @@ refs:
     send: { minGapMs: 10, maxGapMs: 20, byLengthMs: 0, maxPerMinute: 100, maxPerHour: 1000, hardSplitAt: 4000 },
     proactive: { enabled: false },
     sticker: { enabled: true, collectEnabled: true },
+    // 本审计断言"每次运行 messages=[system,user]"（零历史），
+    // 因此要关掉两类会破坏该前提的扩展：后台定时技能（启动即打模型请求）、
+    // 上下文延续（把最近几轮塞进 messages）。
+    skills: {
+      'qzone-diary': { enabled: false },
+      'context-reuse': { enabled: false }
+    },
     store: { maxMessagesPerChat: 0, pastStateLimit: 80, pastStateMaxChars: 6000, keepSessionFiles: 100 },
     server: { port: await freePort(), token: '' }
   };
@@ -324,6 +331,9 @@ refs:
   // ── 场景 0：OneBot 已连接 ──
   await waitFor(() => app.onebot.connected, 5000, 'OneBot WS 连接');
   pass('OneBot WebSocket 已连接并取得登录信息', `self=${app.onebot.selfId}`);
+  // 启动期后台技能（如空间日记到点写稿）会先打一次模型请求；
+  // 本用例断言的是"群消息触发的第一次运行"，先清空避免被后台任务顶掉。
+  llm.state.requests.length = 0;
 
   // ── 场景 1：消息触发运行，模型用工具发言 ──
   llm.state.script.push(

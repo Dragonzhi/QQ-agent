@@ -1527,7 +1527,7 @@ export class Orchestrator {
           imageUserMessages.push({
             role: 'user',
             content: [
-              { type: 'text', text: `[系统：以下是工具 ${name} 返回的 ${what}，请直接"看"了回应]` },
+              { type: 'text', text: `[系统：以下是工具 ${name} 返回的 ${what}。请先看清内容，再自行判断要不要回应、回应什么；图片/视频不一定与你有关，不要脑补画面里没有的东西。]` },
               ...media
             ]
           });

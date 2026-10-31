@@ -75,12 +75,12 @@ async function imageSize(ffprobe, filePath) {
  * 压缩一张图片（如需要）。
  * @param {Buffer} buffer 原始图片字节
  * @param {object} [opts]
- * @param {number} [opts.maxDim=1568] 最长边上限（像素），超过则等比缩小
+ * @param {number} [opts.maxDim=2048] 最长边上限（像素），超过则等比缩小
  * @param {number} [opts.maxBytes=4*1024*1024] 字节上限，超过则尝试压缩
  * @param {number} [opts.quality=4] JPEG 质量（ffmpeg -q:v，2 最好 31 最差，4 是不错的平衡）
  * @returns {Promise<{buffer: Buffer, mime: string, compressed: boolean}>}
  */
-export async function compressImage(buffer, { maxDim = 1568, maxBytes = 4 * 1024 * 1024, quality = 4 } = {}) {
+export async function compressImage(buffer, { maxDim = 2048, maxBytes = 4 * 1024 * 1024, quality = 4 } = {}) {
   const mime = detectMime(buffer) || 'image/jpeg';
   // 小图直接过（字节数就很小，没必要压缩）
   if (buffer.length <= Math.min(maxBytes, 512 * 1024)) {

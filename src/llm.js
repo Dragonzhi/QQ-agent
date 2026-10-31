@@ -1,6 +1,7 @@
 // OpenAI 兼容 Chat Completions 客户端（非流式）。
 // 支持工具调用、usage 统计、可自选模型 —— 这是与 DSH 解耦后的"大脑"接口。
 import { getConfig } from './config.js';
+import { modelImageVerdict } from './vision-scan.js';
 import { resolveModelPrice, priceAt } from './model-prices.js';
 import { skillManager } from './skills/manager.js';
 import {
@@ -100,7 +101,10 @@ function specializedModelFor(messages, cfg) {
   }
   if (hasImage || hasVideo) {
     const v = String(cfg?.api?.visionModel ?? '').trim();
-    if (v) return v;
+    // 主模型自己就能看图时不再切专用模型：图片轮会把整份人设/历史一起交给
+    // 另一个（通常是 flash 档）模型，语气和推理会明显跑偏。专用模型只作为
+    // "主模型明确不支持图片"时的兜底（2026-10-30 图片回怼问题的修法）。
+    if (v && modelImageVerdict(cfg?.api?.provider, cfg?.api?.model) !== 'vision') return v;
   }
   return '';
 }

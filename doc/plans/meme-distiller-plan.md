@@ -174,3 +174,11 @@ data/hot-trends.json →  提取"正在被大家玩"的梗候选   →   candida
   `GET /api/meme-candidates` 200（返回候选 + 插件状态）、`POST /api/meme-candidates/distill` 实跑成功：
   25 条热点 → 2 条新候选（「丧病」0.8、「传统艺能」0.85），加此前「义父」0.72，待审 3 条，evidence 均引热榜原文。
 - 未验证：每天 7 点的定时器自动触发（次日观察日志）；晋升后群里 `查网络梗` 的实际命中（需人工点晋升）。
+
+### 后续增补：候选可编辑（2026-10-31）
+
+用户看过面板后提出：候选只有晋升/驳回/删除，解释写歪时没有修正通道。
+已实现「编辑」按钮 + `openMemeCandidateModal`，`PUT /api/meme-candidates/:id` 不带 `status`
+时走编辑分支（`updateCandidate`），保存不改变状态；**已晋升的会同步改写 `user-added.json` 里的对应条目**
+（按编辑前标题归一化定位），避免"面板改了、机器人查到的还是旧的"。测试见 `test/meme-candidates-test.mjs`（62 项）
+与 `test/coverage-http.mjs` 3D 段。

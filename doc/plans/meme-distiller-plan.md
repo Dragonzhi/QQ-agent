@@ -1,7 +1,7 @@
 # meme-distiller：让梗库自己跟上时代的「蒸馏管线」方案
 
-状态：方案已定稿，实现未开始（2026-10-29）。
-本文档是开工前评审件：先按它实现 P0，跑通真实数据后再决定 P1/P2。
+状态：**P0 已实现**（2026-10-31，主仓 `src/meme-candidates.js` + routes + 设置页面板；插件仓 `plugins/meme-distiller`）。
+P1（nbnhhsh 缩写辅助）/ P2（B站评论区挖掘）未开工，等一周蒸馏质量数据再定。实现落点与验证记录见文末 §八。
 
 ---
 
@@ -141,3 +141,32 @@ data/hot-trends.json →  提取"正在被大家玩"的梗候选   →   candida
   （`plugins/.git` → E:\QQRobot\qq-agent-plugins.git，当前 clean），主仓只提交 routes/UI/test。
 - 每次提交用明确 pathspec（`git add <具体文件>`），绝不 `git add -A`——防止顺手动到 mind WIP。
 - 推送：文档提交推 origin/main；插件仓同样推 origin（TASKS.md 历史惯例：主仓/插件仓都推送留痕）。
+
+## 八、实现记录（P0，2026-10-31）
+
+### 落点
+
+| 层 | 文件 | 说明 |
+|---|---|---|
+| 生产端（插件仓） | `plugins/meme-distiller/plugin.json` / `index.js` | 定时调度（distillHour + checkIntervalMin + catchUpOnStart）、能力 `knowledge.meme-candidates`（distill/status）、蒸馏 prompt、四道落盘闸、`trimPending` 上限 |
+| 存储/晋升（主仓） | `src/meme-candidates.js` | 候选读写（原子写、损坏容错）、`buildCandidates` 之外的晋升查重、写 `user-added.json`、清理 |
+| 接口（主仓） | `src/routes.js` | `GET /api/meme-candidates`、`POST /api/meme-candidates/distill`、`PUT /api/meme-candidates/:id`（active/rejected）、`DELETE /api/meme-candidates/:id` |
+| 面板（主仓） | `ui/app/07-settings-events.js` | 设置页「梗候选库（蒸馏）」：待审/已晋升分组、晋升/驳回/删除、立即蒸馏一次 |
+| 测试（主仓） | `test/meme-candidates-test.mjs`、`test/coverage-http.mjs` 3D 段 | 47 项单测 + 4 项 HTTP 覆盖 |
+
+### 与原方案的两处偏差
+
+1. **插件没有自己再实现一份存储**：直接 `import` 主仓的 `src/meme-candidates.js`（与 hot-trend-tracker
+   import `src/config.js` 同口径）。好处是候选文件 schema 只有一处定义，插件与审查端不会各写各的。
+2. **蒸馏不内置联网核实**：只靠 `evidence` 必填 + 人工闸。原方案里"P1 用 nbnhhsh 校验缩写"仍然有效，
+   但 P0 不加任何网络请求（热榜读的是本地文件）。
+
+### 验证记录
+
+- `node test/meme-candidates-test.mjs` → 47/47。
+- `node test/coverage-http.mjs` → 131 通过 / 1 失败（`POST /api/qq-portable/launch`，与本改动无关：
+  本机装了便携 QQ，期望 400 实际 200），新增 3D 段 4 项全过，接口覆盖率 92%。
+- `node test/render-test.mjs` → 85/85；`node test/tools-skill-audit.mjs` → 新插件清单完整 ✓（存量 9 项失败无关）。
+- 真实蒸馏一次：20 条热榜 → 1 条候选「义父」（别名 义父义母/愿拜为义父，evidence 引热榜简介原文，
+  confidence 0.72），停在 `data/meme-distiller/candidates.json` 待审。
+- 未验证：实例内定时触发（应用当时未运行）、晋升后群里 `查网络梗` 的实际命中（需人工点晋升）。

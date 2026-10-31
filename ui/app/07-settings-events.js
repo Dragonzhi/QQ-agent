@@ -426,6 +426,11 @@ function renderPersonaExamplesPanel() {
         alert(err.message);
       }
     });
+    rowEl.querySelector('.mcd-edit')?.addEventListener('click', () => {
+      // 数据从渲染缓存取（面板刚渲染完必新鲜）；直接改服务端再整体重拉
+      const cand = (state.memeCandidates || []).find((x) => x && x.id === id);
+      if (cand) openMemeCandidateModal({ candidate: cand, onSaved: loadPersonaExamplesPanel });
+    });
     rowEl.querySelector('.mcd-del')?.addEventListener('click', async () => {
       if (!(await uiConfirm('确定删除这条候选？删除后不可恢复（只是驳回请用「驳回」按钮）。'))) return;
       try {
@@ -470,6 +475,7 @@ function memeCandidatesPanel() {
           ? `<button type="button" class="btn btn-small btn-primary mcd-promote" title="晋升：写进梗库自学习文件，机器人下一次「查网络梗」立刻能查到">晋升</button>
              <button type="button" class="btn btn-small mcd-reject" title="驳回：标记为不是梗，留痕参与去重">驳回</button>`
           : ''}
+        <button type="button" class="btn btn-small mcd-edit" title="编辑梗名/别名/含义/用法（保存不改变状态；已晋升的会同步更新梗库）">编辑</button>
         <button type="button" class="btn btn-small btn-danger mcd-del">删除</button>
       </span>
       ${meta ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}

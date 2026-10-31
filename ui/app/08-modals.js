@@ -366,6 +366,64 @@ function openGroupMemeModal({ meme = null, chatId = '', onSaved = null } = {}) {
 }
 
 /**
+ * 「编辑梗候选」模态框：设置页「梗候选库（蒸馏）」的编辑入口。
+ *
+ * 保存 = PUT /api/meme-candidates/:id（不带 status → 走编辑分支，状态不变）。
+ * 已晋升（active）的候选会**同步**改写 data/trendy-memes/user-added.json 里对应那份，
+ * 所以晋升后发现解释不够准，直接在这里改，不用「删了重收」。
+ */
+function openMemeCandidateModal({ candidate = null, onSaved = null } = {}) {
+  const c = candidate || {};
+  const isActive = c.status === 'active';
+  const overlay = modelModalShell({
+    head: `编辑梗候选 · ${isActive ? '已晋升' : '待审'}`,
+    body: `
+      <div class="field"><label>梗名</label>
+        <input type="text" id="mcd-name" value="${esc(c.title || '')}" placeholder="梗本身，2~12 字" /></div>
+      <div class="field"><label>别名（可选，逗号分隔）</label>
+        <input type="text" id="mcd-aliases" value="${esc((c.aliases || []).join('，'))}" placeholder="其他常见写法，最多 4 个" /></div>
+      <div class="field"><label>含义解释</label>
+        <textarea id="mcd-meaning" style="min-height:56px" placeholder="一句话意思；看不明白的别硬编">${esc(c.meaning || '')}</textarea></div>
+      <div class="field"><label>怎么用（可选）</label>
+        <input type="text" id="mcd-usage" value="${esc(c.usage || '')}" placeholder="什么场合、怎么用" /></div>
+      <div class="field"><label>依据（可选）</label>
+        <input type="text" id="mcd-evidence" value="${esc(c.evidence || '')}" placeholder="从哪条热榜/哪句话看出来的" /></div>
+      <div class="hint" id="mcd-hint">保存不改变状态；${isActive ? '已晋升的会同步更新梗库自学习文件。' : '晋升后才写入梗库。'}</div>`,
+    foot: `<button class="btn" id="mcd-cancel">取消</button>
+           <button class="btn btn-primary" id="mcd-save">保存</button>`
+  });
+  overlay.querySelector('#mcd-cancel').addEventListener('click', () => closeModelModal(overlay));
+  overlay.querySelector('#mcd-save').addEventListener('click', async () => {
+    const hint = overlay.querySelector('#mcd-hint');
+    const btn = overlay.querySelector('#mcd-save');
+    const title = overlay.querySelector('#mcd-name').value.trim();
+    const meaning = overlay.querySelector('#mcd-meaning').value.trim();
+    if (!title) { if (hint) hint.textContent = '梗名不能为空'; return; }
+    if (meaning.length < 4) { if (hint) hint.textContent = '含义至少 4 个字（写清楚它是啥）'; return; }
+    if (!c.id) { if (hint) hint.textContent = '缺少候选 id，请刷新面板重试'; return; }
+    btn.disabled = true;
+    try {
+      const r = await api(`/api/meme-candidates/${encodeURIComponent(c.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          title,
+          meaning,
+          aliases: overlay.querySelector('#mcd-aliases').value,
+          usage: overlay.querySelector('#mcd-usage').value,
+          evidence: overlay.querySelector('#mcd-evidence').value
+        })
+      });
+      if (hint) hint.textContent = r?.synced ? '已保存并同步梗库 ✓' : '已保存 ✓';
+      setTimeout(() => closeModelModal(overlay), 1400);
+      if (typeof onSaved === 'function') onSaved();
+    } catch (e) {
+      btn.disabled = false;
+      if (hint) hint.textContent = `保存失败：${e.message}`;
+    }
+  });
+}
+
+/**
  * 「模型配置」模态框（2026-09-18 改版）：收纳原页面的
  * 模型目录 / Base URL / API Key / 图片视频专用模型 / 图片视频开关 / 视频理解方式。
  * 保存按钮 = 把这些字段 PATCH 到 /api/config（掩码 Key 不回传，与主页面同语义）。

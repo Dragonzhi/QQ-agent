@@ -27,7 +27,7 @@ import { builtinVisionResults } from './model-vision-docs.js';
 import { todayKey, normTrigger } from './util.js';
 import { runReviewOnce } from './persona-review.js';
 import { loadMemes, saveMemes, listAllMemes, ACTIVE_CAP } from './group-memes.js';
-import { listCandidates, promoteCandidate, rejectCandidate, removeCandidate, candidateStats } from './meme-candidates.js';
+import { listCandidates, promoteCandidate, rejectCandidate, removeCandidate, updateCandidate, candidateStats } from './meme-candidates.js';
 import { logger } from './logger.js';
 import { skillManager } from './skills/manager.js';
 import { getSkillConfig, setSkillConfig, setSkillEnabled, listConfiguredSkillIds } from './skills/config.js';
@@ -719,6 +719,13 @@ export function createRoutes(deps) {
         const id = decodeURIComponent(match[1]);
         const body = await bodyOf(req);
         const status = String(body.status || '');
+        // 不带 status = 编辑内容（晋升前改解释 / 晋升后修错别字）。
+        // 已晋升的会同步改写自学习库里的对应条目，避免"面板改了、机器人查到的还是旧的"。
+        if (!status) {
+          const r = updateCandidate(id, body);
+          if (!r.ok) return json(res, r.code || 400, { ok: false, error: r.error });
+          return json(res, 200, { ok: true, candidate: r.candidate, synced: r.synced === true, stats: candidateStats() });
+        }
         if (status === 'active') {
           const r = promoteCandidate(id);
           if (!r.ok) return json(res, r.code || 400, { ok: false, error: r.error });

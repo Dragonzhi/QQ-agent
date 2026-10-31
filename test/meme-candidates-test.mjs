@@ -14,7 +14,7 @@ const plugin = await import('../plugins/meme-distiller/index.js');
 
 let passed = 0;
 const ok = (cond, msg) => { assert.ok(cond, msg); passed++; };
-const eq = (a, b, msg) => { assert.equal(a, b, msg); passed++; };
+const eq = (a, b, msg) => { assert.deepStrictEqual(a, b, msg); passed++; };
 
 // ── 1. 归一化：大小写/空白/标点不计差异 ──
 eq(core.normTitle('  YYDS！'), 'yyds', '归一化应去空白与标点');
@@ -155,5 +155,38 @@ passed++;
 const inUse = plugin.titlesInUse();
 ok(inUse.has(core.normTitle('正式梗')), '自学习库里的梗应在查重集合里');
 ok(inUse.size > 10, '底稿标题也应参与查重');
+
+// ── 9. 编辑：pending 改内容不动状态；active 同步自学习库 ──
+const seedEdit = () => {
+  core.saveCandidates({
+    ...core.loadCandidates(),
+    candidates: [
+      ...core.loadCandidates().candidates.filter((c) => c.id !== 'md-e'),
+      { id: 'md-e', title: '编辑测试梗', aliases: ['旧别名'], meaning: '旧解释文本', usage: '旧用法', evidence: 'x', confidence: 0.9, status: 'pending', source: 'distill', createdAt: now }
+    ]
+  });
+};
+seedEdit();
+const ed = core.updateCandidate('md-e', { meaning: '新的解释文本', aliases: '新别名，第二个', usage: '新用法' });
+eq(ed.ok, true, '编辑应成功');
+eq(ed.candidate.status, 'pending', '编辑不改变状态');
+eq(ed.candidate.meaning, '新的解释文本');
+eq(ed.candidate.usage, '新用法');
+eq(ed.candidate.aliases, ['新别名', '第二个'], '别名字符串应被拆分去重');
+ok(ed.candidate.updatedAt > 0, '应记录 updatedAt');
+eq(core.updateCandidate('md-e', { title: '  ' }).code, 400, '空梗名应 400');
+eq(core.updateCandidate('md-e', { meaning: '短' }).code, 400, '含义过短应 400');
+eq(core.updateCandidate('md-nope', { meaning: '新的解释文本' }).code, 404, '不存在的候选应 404');
+
+// 晋升后再编辑：必须同步到 user-added.json（否则面板改了、机器人查到的还是旧的）
+eq(core.promoteCandidate('md-e').ok, true);
+const ed2 = core.updateCandidate('md-e', { title: '编辑测试梗改名', meaning: '晋升后修正的解释' });
+eq(ed2.ok, true);
+eq(ed2.synced, true, '已晋升的编辑应标记为已同步');
+const userSaved = JSON.parse(fs.readFileSync(path.join(tmp, 'trendy-memes', 'user-added.json'), 'utf8'));
+const syncedEntry = userSaved.entries.find((e) => e.title === '编辑测试梗改名');
+ok(syncedEntry, '自学习库里的标题应跟着改');
+eq(syncedEntry.meaning, '晋升后修正的解释', '自学习库里的含义应同步');
+ok(!userSaved.entries.some((e) => e.title === '编辑测试梗'), '旧标题不应残留（否则查重会漏）');
 
 console.log(`梗候选库测试全部通过 ✅（${passed} 项）`);

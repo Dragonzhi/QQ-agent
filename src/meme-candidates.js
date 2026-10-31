@@ -134,6 +134,74 @@ export function promoteCandidate(id) {
   return { ok: true, entry };
 }
 
+/** 别名输入容错：数组或「逗号/顿号/空格分隔」的字符串都能吃，去重、去空、去与标题重复的。 */
+export function parseAliases(value, title = '') {
+  const raw = Array.isArray(value) ? value : String(value ?? '').split(/[,，、\s]+/);
+  const normTitleValue = normTitle(title);
+  const out = [];
+  for (const a of raw) {
+    const s = String(a ?? '').trim().slice(0, 20);
+    if (!s) continue;
+    const n = normTitle(s);
+    if (!n || n === normTitleValue) continue;
+    if (out.some((x) => normTitle(x) === n)) continue;
+    out.push(s);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+/**
+ * 编辑一条候选（晋升前改解释 / 晋升后修错别字都走这里）。
+ *
+ * 状态不在这里改（晋升/驳回仍是 PUT 带 status 的那条路径），这里只动内容字段。
+ * 已晋升的条目会**同步**改写 user-added.json 里对应的那一份 —— 否则面板改了、
+ * 机器人查到的还是旧解释。定位口径与晋升查重一致：归一化标题。
+ * 返回 { ok, candidate, synced } 或 { ok:false, code, error }。
+ */
+export function updateCandidate(id, patch = {}) {
+  const store = loadCandidates();
+  const cur = store.candidates.find((c) => c && c.id === id);
+  if (!cur) return { ok: false, code: 404, error: '找不到这条候选' };
+  const next = { ...cur };
+  if (patch.title !== undefined) {
+    const t = String(patch.title).trim().slice(0, 20);
+    if (!t) return { ok: false, code: 400, error: '梗名不能为空' };
+    next.title = t;
+  }
+  if (patch.meaning !== undefined) {
+    const m = String(patch.meaning).replace(/\s+/g, ' ').trim();
+    if (m.length < 4) return { ok: false, code: 400, error: '含义至少 4 个字（写清楚它是啥）' };
+    next.meaning = m.slice(0, 300);
+  }
+  if (patch.usage !== undefined) next.usage = String(patch.usage).replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (patch.evidence !== undefined) next.evidence = String(patch.evidence).replace(/\s+/g, ' ').trim().slice(0, 200);
+  if (patch.tone !== undefined) next.tone = String(patch.tone).replace(/\s+/g, ' ').trim().slice(0, 20);
+  if (patch.era !== undefined) next.era = String(patch.era).replace(/\s+/g, ' ').trim().slice(0, 20);
+  if (patch.freshness !== undefined) next.freshness = String(patch.freshness).replace(/\s+/g, ' ').trim().slice(0, 10);
+  if (patch.aliases !== undefined) next.aliases = parseAliases(patch.aliases, next.title);
+  if (patch.tags !== undefined) {
+    const tags = Array.isArray(patch.tags) ? patch.tags : String(patch.tags ?? '').split(/[,，、\s]+/);
+    next.tags = tags.map((t) => String(t ?? '').trim().slice(0, 10)).filter(Boolean).slice(0, 6);
+  }
+  next.updatedAt = Date.now();
+
+  // 已晋升：把改动同步进自学习库（按**编辑前**的标题定位，标题改了也能找到）
+  let synced = false;
+  if (cur.status === 'active') {
+    const entries = loadUserAdded();
+    const oldNorm = normTitle(cur.title);
+    const idx = entries.findIndex((e) => normTitle(e.title) === oldNorm);
+    if (idx >= 0) {
+      entries[idx] = candidateToEntry(next);
+      writeUserAdded(entries);
+      synced = true;
+    }
+  }
+  saveCandidates({ ...store, candidates: store.candidates.map((c) => (c.id === id ? next : c)) });
+  return { ok: true, candidate: next, synced };
+}
+
 /** 驳回：留痕参与去重，不删除（与群梗库同口径）。 */
 export function rejectCandidate(id) {
   const store = loadCandidates();

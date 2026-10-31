@@ -438,6 +438,26 @@ c.section('3D. 梗候选库');
     assert.equal(missing.status, 404, '不存在的候选应 404');
   });
 
+  await c.check('PUT 候选编辑：不改状态；已晋升的同步自学习库；空梗名 400', async () => {
+    // md_t1 已晋升（active）：改含义必须同步到 user-added.json，否则面板改了、机器人查到的还是旧的
+    const act = await hit('PUT', '/api/meme-candidates/md_t1', { body: { meaning: '编辑后的含义文本' } });
+    assert.equal(act.status, 200, `应 200，实际 ${act.status}：${JSON.stringify(act.data)}`);
+    assert.equal(act.data.synced, true, '已晋升的编辑应返回 synced=true');
+    assert.equal(act.data.candidate.status, 'active', '编辑不改变状态');
+    const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataDir, 'trendy-memes', 'user-added.json'), 'utf8'));
+    assert.equal(saved.entries[0].meaning, '编辑后的含义文本', '自学习库里的含义应同步');
+
+    // md_t2 仍是 pending：编辑只动内容，状态保持 pending
+    const pend = await hit('PUT', '/api/meme-candidates/md_t2', { body: { usage: '改过的用法' } });
+    assert.equal(pend.status, 200);
+    assert.equal(pend.data.synced, false);
+    assert.equal(pend.data.candidate.status, 'pending');
+    assert.equal(pend.data.candidate.usage, '改过的用法');
+
+    const bad = await hit('PUT', '/api/meme-candidates/md_t2', { body: { title: '  ' } });
+    assert.equal(bad.status, 400, '空梗名应 400');
+  });
+
   await c.check('PUT 驳回 + DELETE 删除：各自动作并落盘', async () => {
     const rej = await hit('PUT', '/api/meme-candidates/md_t2', { body: { status: 'rejected' } });
     assert.equal(rej.status, 200);

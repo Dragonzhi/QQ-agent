@@ -117,8 +117,7 @@
 | 里程碑 | 内容 | 提交 |
 |---|---|---|
 | M0 | 删根目录误建的 `nul`、删 `.dsh-ops/meme-distill-verify.mjs`；写本方案 | `docs(plans)：梗学习增强方案（频次信号 + 未知词观察）` |
-| M1 | `src/meme-learning.js` + 频次闸/证据 id + 面板次数 + 测试 | `feat(memes)：群梗频次信号与证据消息 id（新候选需 ≥3 次/日，pending 渐进修正）` |
-| M2 | watch 存储 + unknown 处理 + prompt 注入 + 测试 | `feat(memes)：未知词观察表（提及即提示查询，查明白进网络梗库）` |
+| M1+M2 | `src/meme-learning.js` + 频次闸/证据 id + watch + prompt 注入 + 面板 + 测试 | `feat(memes)：群梗频次信号与未知词观察表（借 MaiBot 学习管线）`（实际合并为一个提交：两半共用同一批文件与同一段复盘逻辑，硬拆只会把同一函数切碎） |
 | M3 | 重启实例（PID 41796）→ 手动跑一轮复盘 → 验收 → 回写 | `docs(TASKS)：回写梗学习增强落地与验证` |
 
 全部用明确 pathspec（绝不 `git add -A`）；M3 结束时 `git push origin main`。插件仓本轮无提交。
@@ -142,3 +141,34 @@
 - 回归：`node test/selftest.mjs`、`node test/render-test.mjs`、`node test/tools-skill-audit.mjs`（与存量 9 项失败基线比对，不得新增）。
 - 实例验收：重启后 `POST /api/persona/review/run`，检查 `data/group-memes/*.json` 是否出现 `count/evidenceMids`、`data/meme-watch/*.json` 是否生成、待审面板是否正常。
 - 观察 1~2 天的候选质量（晋升率、误收率），再决定阈值是否要做成配置。
+
+---
+
+## 九、实施记录（2026-10-31）
+
+### 落点
+
+| 层 | 文件 | 说明 |
+|---|---|---|
+| 纯函数 + 观察表 | `src/meme-learning.js`（新） | 计数/阈值/证据合并/修正/watch 读写与匹配 |
+| 复盘接线 | `src/persona-review.js` | 群梗任务一次调用产出 memes/updates/unknown；频次闸；watch 落盘；summary 增加 `memesRefined/watchAdded` |
+| 提示词 | `src/prompt.js` | 未读命中观察词时注入【本群新说法】（动态区） |
+| 面板 | `ui/app/07-settings-events.js` | 群梗行显示「出现 N 次」（active 也显示） |
+| 测试 | `test/meme-learning-test.mjs`（新，53 项）、`test/persona-review-test.mjs`（9 用例）、`test/test-prompt.mjs`（观察词 6 项） | — |
+
+### 验证
+
+- `test/meme-learning-test.mjs` 53/53；`test/persona-review-test.mjs` 9/9；
+  `test/test-prompt.mjs`、`test/selftest.mjs` 41/41、`test/render-test.mjs` 85/85、`test/meme-candidates-test.mjs` 47/47。
+- `test/tools-skill-audit.mjs` 仍是 9 项存量失败（qukan/qqzone 等），无新增。
+- 实例重启（PID 51524）后手动跑一轮真实复盘：4 个群、0 错误；
+  summary 已出现 `memesRefined/watchAdded` 字段；频次闸拦下 1 条低频候选；
+  现存群梗文件开始出现 `count`（如 `好吃懒做的干饭肥鱼嘤鲸` rejected count=2、`飞雷神送餐` pending count=1）。
+
+### 观察项（尚未定论）
+
+- **日窗口 ≥3 次是否过严**：本次真实复盘只产出 1 条候选且被频次闸拦下。若连续几天仍几乎无候选，
+  优先调 `MIN_DAY_OCCURRENCES`（2）或把统计窗口从"当天"放宽到"最近 N 天消息"（后者要解决跨晚重复计数）。
+- **观察词未出现**：模型本次未产出 `unknown`；若长期为空，检查群聊文本里是否真有"看不懂的词"，
+  或把 unknown 的提示写得更具体（给正反例）。
+- 阈值/窗口目前是常量（`src/meme-learning.js` 顶部），有数据后再决定是否做成配置项。

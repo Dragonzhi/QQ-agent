@@ -27,6 +27,7 @@ import { builtinVisionResults } from './model-vision-docs.js';
 import { todayKey, normTrigger } from './util.js';
 import { runReviewOnce } from './persona-review.js';
 import { loadMemes, saveMemes, listAllMemes, ACTIVE_CAP } from './group-memes.js';
+import { listCandidates, promoteCandidate, rejectCandidate, removeCandidate, candidateStats } from './meme-candidates.js';
 import { logger } from './logger.js';
 import { skillManager } from './skills/manager.js';
 import { getSkillConfig, setSkillConfig, setSkillEnabled, listConfiguredSkillIds } from './skills/config.js';
@@ -678,6 +679,65 @@ export function createRoutes(deps) {
         if (next.length === memes.length) return json(res, 404, { ok: false, error: '找不到这条群梗' });
         saveMemes(`group:${chatId}`, next);
         return json(res, 200, { ok: true });
+      }
+    },
+
+    // ── 梗候选库（meme-distiller，doc/plans/meme-distiller-plan.md P0）──
+    // 生产端是插件（定时蒸馏 → candidates.json pending）；这里只做审查：
+    // 列表 / 晋升（写 trendy-memes 的 user-added.json）/ 驳回 / 删除 / 手动跑一次。
+    {
+      method: 'GET', pattern: '/api/meme-candidates',
+      handler: async ({ res, json }) => {
+        // 插件状态拿不到（没装/被关）不算错：候选库照常可读可审，只是不能手动蒸馏
+        let distill = null;
+        for (const p of skillManager.getCapabilityProviders('knowledge.meme-candidates', {})) {
+          try { distill = p.fn({ action: 'status' }); } catch { distill = null; }
+          break;
+        }
+        return json(res, 200, { ok: true, candidates: listCandidates(), stats: candidateStats(), distill });
+      }
+    },
+    {
+      // 手动触发一次蒸馏（设置页「立即蒸馏」）。蒸馏本身可能跑几十秒，
+      // 这里同步等结果 —— 调用方是用户点按钮，等得起，也省掉轮询。
+      method: 'POST', pattern: '/api/meme-candidates/distill',
+      handler: async ({ res, json }) => {
+        let summary;
+        for (const p of skillManager.getCapabilityProviders('knowledge.meme-candidates', {})) {
+          try { summary = await p.fn({ action: 'distill', force: true }); } catch (e) { summary = { ok: false, errors: [String(e?.message ?? e)] }; }
+          break;
+        }
+        if (summary === undefined) {
+          return json(res, 200, { ok: false, error: '梗蒸馏插件没启用（plugins/meme-distiller）：候选库只能审查已有条目' });
+        }
+        return json(res, 200, { ok: summary?.ok === true, summary, stats: candidateStats() });
+      }
+    },
+    {
+      method: 'PUT', pattern: /^\/api\/meme-candidates\/([^/]+)$/,
+      handler: async ({ req, res, json, match }) => {
+        const id = decodeURIComponent(match[1]);
+        const body = await bodyOf(req);
+        const status = String(body.status || '');
+        if (status === 'active') {
+          const r = promoteCandidate(id);
+          if (!r.ok) return json(res, r.code || 400, { ok: false, error: r.error });
+          return json(res, 200, { ok: true, entry: r.entry, stats: candidateStats() });
+        }
+        if (status === 'rejected') {
+          const r = rejectCandidate(id);
+          if (!r.ok) return json(res, r.code || 400, { ok: false, error: r.error });
+          return json(res, 200, { ok: true, stats: candidateStats() });
+        }
+        return json(res, 400, { ok: false, error: 'status 只允许 active/rejected' });
+      }
+    },
+    {
+      method: 'DELETE', pattern: /^\/api\/meme-candidates\/([^/]+)$/,
+      handler: async ({ res, json, match }) => {
+        const r = removeCandidate(decodeURIComponent(match[1]));
+        if (!r.ok) return json(res, r.code || 400, { ok: false, error: r.error });
+        return json(res, 200, { ok: true, stats: candidateStats() });
       }
     },
 

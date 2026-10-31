@@ -42,14 +42,18 @@ async function loadPersonaExamplesPanel() {
   const box = $('#persona-examples-panel');
   if (!box) return;
   try {
-    // 群梗接口失败不拖垮示例列表：单独 catch 成空
-    const [r, gm] = await Promise.all([
+    // 群梗/梗候选接口失败不拖垮示例列表：各自单独 catch 成空
+    const [r, gm, mcd] = await Promise.all([
       api('/api/persona/examples'),
-      api('/api/persona/group-memes').catch(() => ({ chats: [] }))
+      api('/api/persona/group-memes').catch(() => ({ chats: [] })),
+      api('/api/meme-candidates').catch(() => ({ candidates: [] }))
     ]);
     state.personaExamples = Array.isArray(r.examples) ? r.examples : [];
     state.personaExamplesMaxActive = Number(r.maxActive) || 30;
     state.personaGroupMemes = Array.isArray(gm.chats) ? gm.chats : [];
+    state.memeCandidates = Array.isArray(mcd?.candidates) ? mcd.candidates : [];
+    state.memeCandidatesStats = mcd?.stats || null;
+    state.memeDistiller = mcd?.distill || null;
     renderPersonaExamplesPanel();
   } catch (e) {
     box.innerHTML = `<div class="hint">示例库加载失败：${esc(e.message)}</div>`;
@@ -195,7 +199,8 @@ function renderPersonaExamplesPanel() {
       <div class="pe-group-head">群内梗库</div>
       <div class="hint" style="margin-bottom:6px">每群独立的黑话/绰号/事件梗库：生效中的会注入对应群提示词的【群内梗】段。由每晚复盘自动收集，晋升后才生效；只收过高可信度闸的候选（每群每次最多几条在「每晚复盘」里调）。判断不是梗就点「驳回」，同名候选不会再被收（驳回后不再展示，只留去重记忆）；查重与上限（20 条/群）同示例库。</div>
       ${memeChats.map(memeGroup).join('') || '<div class="hint">（还没有任何群梗：启用复盘跑过一轮后，这里会出现各群的候选梗）</div>'}
-    </div>`;
+    </div>
+    ${memeCandidatesPanel()}`;
 
   // 面板输入不进设置表单的自动保存链：这些字段落的是示例专用端点，
   // 冒泡到 #settings-form 只会触发一次无意义的全量 config 保存（还会挂黄条）。
@@ -377,6 +382,107 @@ function renderPersonaExamplesPanel() {
       });
     });
   });
+
+  // 梗候选库（蒸馏）：手动蒸馏 + 行内晋升/驳回/删除
+  $('#mcd-distill')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const hint = $('#mcd-hint');
+    btn.disabled = true;
+    if (hint) hint.textContent = '蒸馏中…（会调一次模型，十几秒）';
+    try {
+      const r = await api('/api/meme-candidates/distill', { method: 'POST', body: '{}' });
+      if (r.ok) alert(`蒸馏完成：${r.summary?.reason || '完成'}`);
+      else alert(r.error || r.summary?.reason || (r.summary?.errors || []).join('；') || '蒸馏失败');
+      await loadPersonaExamplesPanel();
+    } catch (err) {
+      btn.disabled = false;
+      if (hint) hint.textContent = '';
+      alert(`蒸馏失败：${err.message}`);
+    }
+  });
+  box.querySelectorAll('[data-mcd-id]').forEach((rowEl) => {
+    const id = rowEl.dataset.mcdId;
+    rowEl.querySelector('.mcd-promote')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/meme-candidates/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ status: 'active' }) });
+        await loadPersonaExamplesPanel();
+      } catch (err) {
+        e.currentTarget.disabled = false;
+        // 409 查重（梗库已有同名/同别名）等后端原因直接亮给用户
+        alert(err.message);
+      }
+    });
+    rowEl.querySelector('.mcd-reject')?.addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/meme-candidates/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ status: 'rejected' }) });
+        await loadPersonaExamplesPanel();
+      } catch (err) {
+        e.currentTarget.disabled = false;
+        alert(err.message);
+      }
+    });
+    rowEl.querySelector('.mcd-del')?.addEventListener('click', async () => {
+      if (!(await uiConfirm('确定删除这条候选？删除后不可恢复（只是驳回请用「驳回」按钮）。'))) return;
+      try {
+        await api(`/api/meme-candidates/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' });
+        await loadPersonaExamplesPanel();
+      } catch (err) {
+        alert(`删除失败：${err.message}`);
+      }
+    });
+  });
+}
+
+const MCD_STATUS_LABEL = { pending: '待审', active: '生效', rejected: '驳回' };
+
+/**
+ * 「梗候选库（蒸馏）」分区：meme-distiller 每天从热榜蒸馏出的新梗候选。
+ * 只进待审；点「晋升」才写进 data/trendy-memes/user-added.json ——
+ * trendy-memes 的 loadAll() 本来就合并这个文件，所以晋升即生效、消费端零改动。
+ */
+function memeCandidatesPanel() {
+  const list = state.memeCandidates || [];
+  const pending = list.filter((c) => c && c.status === 'pending');
+  const active = list.filter((c) => c && c.status === 'active');
+  const rejected = list.filter((c) => c && c.status === 'rejected');
+  const d = state.memeDistiller;
+  const runLine = d
+    ? (d.lastRunDay ? `上次蒸馏：${esc(d.lastRunDay)}${d.running ? '（进行中）' : ''}` : '还没蒸馏过')
+    : '插件未启用（plugins/meme-distiller），只能审查已有候选';
+  const row = (c) => {
+    const conf = Number(c.confidence);
+    const meta = [
+      c.evidence ? `依据：${c.evidence}` : '',
+      Number.isFinite(conf) && conf > 0 ? `可信 ${conf}` : ''
+    ].filter(Boolean).join(' · ');
+    return `
+    <div class="pe-row${meta ? ' pe-row-has-note' : ''}" data-mcd-id="${esc(c.id)}">
+      <span class="pe-source" title="状态：${esc(c.status || '')}">${esc(MCD_STATUS_LABEL[c.status] || c.status || '未知')}</span>
+      <span class="pe-trigger" title="${esc(c.title)}">${esc(c.title)}</span>
+      <span class="pe-good" title="${esc(c.meaning || '')}">${esc(c.meaning || '')}${c.usage ? `（用：${esc(c.usage)}）` : ''}</span>
+      <span class="pe-actions">
+        ${c.status === 'pending'
+          ? `<button type="button" class="btn btn-small btn-primary mcd-promote" title="晋升：写进梗库自学习文件，机器人下一次「查网络梗」立刻能查到">晋升</button>
+             <button type="button" class="btn btn-small mcd-reject" title="驳回：标记为不是梗，留痕参与去重">驳回</button>`
+          : ''}
+        <button type="button" class="btn btn-small btn-danger mcd-del">删除</button>
+      </span>
+      ${meta ? `<span class="pe-note" title="${esc(meta)}">${esc(meta)}</span>` : ''}
+    </div>`;
+  };
+  return `
+    <div class="pe-group" id="pe-meme-candidates-box">
+      <div class="pe-group-head">梗候选库（蒸馏）<span class="muted">（待审 ${pending.length} · 生效 ${active.length} · 驳回 ${rejected.length}）</span></div>
+      <div class="hint" style="margin-bottom:6px">每天由插件从热榜蒸馏出的「网络新梗」候选，只进待审。点「晋升」才写进梗库自学习文件（data/trendy-memes/user-added.json），机器人下一次「查网络梗」立刻能查到；判断不是梗就「驳回」（留痕参与去重，同名不会再收）。${runLine}。</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+        <button type="button" class="btn btn-small btn-primary" id="mcd-distill" title="不等定时，立刻跑一次蒸馏（会调一次模型，约十几秒）">立即蒸馏一次</button>
+        <span class="hint" id="mcd-hint" style="margin:0"></span>
+      </div>
+      ${pending.map(row).join('') || '<div class="hint">（暂无待审候选：等定时蒸馏跑完，或点上面的「立即蒸馏一次」）</div>'}
+      ${active.length ? `<div class="pe-group-head" style="margin-top:8px">已晋升<span class="muted">（${active.length} 条）</span></div>${active.map(row).join('')}` : ''}
+    </div>`;
 }
 
 function bindSettingsEvents(c) {

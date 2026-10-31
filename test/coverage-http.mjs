@@ -389,6 +389,68 @@ c.section('3C. 群梗库 + 复盘');
   });
 }
 
+// ── 3D. 梗候选库（meme-distiller P0）────────────────────────────────
+c.section('3D. 梗候选库');
+{
+  // 预置候选文件（插件生产端写的同一份文件；这里直接落盘，不依赖插件/LLM）
+  const mcdDir = path.join(ctx.dataDir, 'meme-distiller');
+  fs.mkdirSync(mcdDir, { recursive: true });
+  fs.writeFileSync(path.join(mcdDir, 'candidates.json'), JSON.stringify({
+    version: 1,
+    lastRunDay: '2026-10-31',
+    candidates: [
+      { id: 'md_t1', title: '预置候选梗', aliases: ['候选别名'], meaning: '预置候选含义', usage: '群里用', tone: '自嘲', freshness: '正热', evidence: '热榜里出现', confidence: 0.9, tags: ['测试'], status: 'pending', source: 'distill', createdAt: 111 },
+      { id: 'md_t2', title: '预置候选梗', aliases: [], meaning: '同名但来自另一条', evidence: '热榜里也出现', confidence: 0.85, status: 'pending', source: 'distill', createdAt: 112 }
+    ]
+  }), 'utf8');
+
+  await c.check('GET /api/meme-candidates：返回候选与统计（待审 2）', async () => {
+    const r = await hit('GET', '/api/meme-candidates');
+    assert.equal(r.status, 200);
+    assert.equal(r.data.ok, true);
+    assert.equal(r.data.candidates.length, 2);
+    assert.equal(r.data.candidates[0].id, 'md_t2', '新的待审应排前面');
+    assert.equal(r.data.stats.pending, 2);
+  });
+
+  await c.check('PUT /api/meme-candidates/:id：晋升 → active 且写入 user-added.json（形状对齐 entriesOf）', async () => {
+    const r = await hit('PUT', '/api/meme-candidates/md_t1', { body: { status: 'active' } });
+    assert.equal(r.status, 200, `应 200，实际 ${r.status}：${JSON.stringify(r.data)}`);
+    assert.equal(r.data.entry.title, '预置候选梗');
+    assert.equal(r.data.entry.freshness, '正热');
+    const userFile = path.join(ctx.dataDir, 'trendy-memes', 'user-added.json');
+    const saved = JSON.parse(fs.readFileSync(userFile, 'utf8'));
+    assert.equal(saved.entries.length, 1, '自学习库应新增 1 条');
+    assert.equal(saved.entries[0].title, '预置候选梗');
+    assert.ok(!('evidence' in saved.entries[0]), '候选内部字段不应写进梗库');
+    const back = (await hit('GET', '/api/meme-candidates')).data.candidates.find((x) => x.id === 'md_t1');
+    assert.equal(back.status, 'active', '晋升结果应落盘');
+  });
+
+  await c.check('PUT 候选：同名晋升 409、非法 status 400、不存在 404', async () => {
+    // md_t2 与刚晋升的条目同名（归一化后）→ 应被自学习库查重拦下
+    const dup = await hit('PUT', '/api/meme-candidates/md_t2', { body: { status: 'active' } });
+    assert.equal(dup.status, 409, '同名晋升应 409');
+    assert.match(String(dup.data.error || ''), /同名|别名/);
+    const bad = await hit('PUT', '/api/meme-candidates/md_t2', { body: { status: 'published' } });
+    assert.equal(bad.status, 400, '非法 status 应 400');
+    const missing = await hit('PUT', '/api/meme-candidates/md_nope', { body: { status: 'rejected' } });
+    assert.equal(missing.status, 404, '不存在的候选应 404');
+  });
+
+  await c.check('PUT 驳回 + DELETE 删除：各自动作并落盘', async () => {
+    const rej = await hit('PUT', '/api/meme-candidates/md_t2', { body: { status: 'rejected' } });
+    assert.equal(rej.status, 200);
+    assert.equal(rej.data.stats.rejected, 1);
+    const del = await hit('DELETE', '/api/meme-candidates/md_t2', { body: '{}' });
+    assert.equal(del.status, 200);
+    const back = (await hit('GET', '/api/meme-candidates')).data.candidates;
+    assert.ok(!back.some((x) => x.id === 'md_t2'), '删除后不应再出现');
+    const again = await hit('DELETE', '/api/meme-candidates/md_t2', { body: '{}' });
+    assert.equal(again.status, 404, '再删应 404');
+  });
+}
+
 // ── 4. Skill / 工具 ──────────────────────────────────────────────────────
 c.section('4. Skill / 工具');
 {

@@ -408,6 +408,30 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(replyPrompt.includes('[引用 某条消息（原文已不可用）]'), '引用原文解析不到时应保留引用标记');
 }
 
+// ── 11d. 唤醒方式说明（2026-11-01：随机/插话 ≠ 有人叫你）─────────────────
+{
+  const buildWith = (reason, text = '这图七年前就是这样') => buildUserPrompt({
+    chatKey: 'group:123', kind: 'group', chatId: '123', chatName: '测试群',
+    triggerEntries: [{ id: 'w1', mid: 6, ts: Date.now(), senderId: 'u6', senderName: '己', text, atNames: [], atMe: false }],
+    store, memory, stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],
+    selfNickname: '测试机', runSeq: 43, moreUnreadDuringRun: false, proactive: false,
+    tierInfo: { tier: 3, count: 80, reason }
+  });
+  const rand = buildWith('随机命中(48%)');
+  assert.ok(rand.includes('【这次是随机醒的，不是有人叫你】'), '随机唤醒要把"不是叫你"说明白');
+  assert.ok(rand.includes('不要拿单独一条碎片消息脑补剧情'), '随机唤醒要禁止碎片脑补');
+  assert.ok(rand.indexOf('【未读信息】') < rand.indexOf('【这次是随机醒的'), '唤醒说明应在未读信息之后（动态区）');
+
+  const chime = buildWith('上下文相关（插话判定：在调侃机器人，等它回嘴）');
+  assert.ok(chime.includes('【这次是插话判定认为有你的戏份，不是有人 @ 你】'), '插话唤醒也要标明不是被点名');
+  assert.ok(chime.includes('判定理由：在调侃机器人，等它回嘴'), '应把判定理由原样带给模型');
+  assert.ok(chime.includes('别复述'), '插话唤醒要提醒别复述');
+
+  const at = buildWith('被艾特');
+  assert.ok(!at.includes('【这次是随机醒的'), '@ 唤醒不应出现随机提示段');
+  assert.ok(!at.includes('【这次是插话判定'), '@ 唤醒不应出现插话提示段');
+}
+
 // ── 12. 接话要有内容（核心规则：空转短句禁令，配合话题热身卡）────────────
 {
   const sys12 = buildSystemPrompt();

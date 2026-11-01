@@ -91,6 +91,10 @@ function speakOrNot(participation) {
     '- 默认不开口。每次被叫来，第一反应是"这话是跟我说的吗"；不是就安静结束，不接也不评。',
     '- 只有命中例外才开口：① 被 @ / 被点名 / 被直接提问；② 话题正好撞你熟悉的梗、某人的记忆、或你正在关心的事；③ 群里明显冷场且你手上真有具体内容。',
     '- 别人的局不插话：两个群友来回互怼/接梗（A 说一句 B 回一句）、消息里 @ 或引用了别的群友、合并转发里是别人的对话 —— 除非有人 @ 你或直接问你，否则整段划走。',
+    // 2026-11-01：模型反馈层之外再给一条"怎么识别"的硬规则 —— 未读信息后面带
+    // （对某某说）标记的，就是别人在跟某某说话，不要当成在问你、不要抢答。
+    '- 未读信息后面带「（对某某说）」标记的，是**别人在跟某某说话**，不是你的事；它后面带不带问号都不影响这个判断。只有同时 @ 了你、引用你的话、或叫了你的名字，才可能是对你说的。',
+    '- 看清楚引用方向：「[引用 某人：…] 正文」是**第一个说话的人在回应某人**，被引用的人并没有在说话；别把被引用的那句话当成当前说话人说的，也别对着被引用的人回答。',
     '- 不值得开口：只会复述/总结/附和；刚说过很多；话题已经翻篇；别人已经答得很好；你确实没兴趣。',
     '- 同一件事主动追问/发起最多 2 次；没人接或话题漂移就放下，不要硬拉回来。',
     '- 冷场且有具体生活念头时可以主动开口；没有就安静，不要用"有人吗""大家还在吗"这种气氛组话术。'
@@ -535,7 +539,15 @@ function resolveCapabilityFn(name) {
 
 function formatEntry(m, { withId = true } = {}) {
   const senderId = String(m.senderId || '');
-  const replyPrefix = m.reply?.text || m.reply?.sender ? `[引用 ${[m.reply?.sender, m.reply?.text].filter(Boolean).join('：')}]` : '';
+  // 引用标记：能解析出原文就带上「引用 谁：内容」；解析不到（被引消息不在存档/已删）
+  // 也不能整段丢掉 —— 丢了模型就分不清"这是一句回复"还是"一句独立发言"，
+  // 于是把别人的对话当成对自己说的（2026-11-01 用户反馈"分不清谁对谁说"的形态之一）。
+  let replyPrefix = '';
+  if (m.reply?.text || m.reply?.sender) {
+    replyPrefix = `[引用 ${[m.reply?.sender, m.reply?.text].filter(Boolean).join('：')}]`;
+  } else if (m.reply && typeof m.reply === 'object') {
+    replyPrefix = '[引用 某条消息（原文已不可用）]';
+  }
   const hasMid = m.mid !== null && m.mid !== undefined && String(m.mid) !== '';
   const idPrefix = withId && hasMid ? `#${m.mid} ` : '';
 
@@ -786,7 +798,19 @@ function triggerLabels(entry, ctx) {
   if ((selfNick && text.includes(`@${selfNick}`)) || (nick && text.includes(`@${nick}`))) labels.push('@我');
   if ((botName && lower.includes(botName)) || (nick && lower.includes(nick))) labels.push('提到我');
   if (noteName && lower.includes(noteLower)) labels.push('提到我（备注名）');
-  if (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text)) labels.push('提问');
+  // ── 对谁说（2026-11-01）───────────────────────────────────────────────
+  // 用户反馈"分不清有些话是谁对谁说的"：一条「@张三 你吃了吗？」会被无条件标成
+  // （提问），模型很容易当成"在问我"然后去接别人的话。atNames 是渲染进正文的
+  // @ 片段原文（带 (QQ:xxx)），这里直接把它翻成「对张三说」，并**不给别人的提问
+  // 打（提问）标签** —— 那是问别人的，不是问机器人的。
+  const ats = (Array.isArray(entry?.atNames) ? entry.atNames : [])
+    .map((s) => String(s ?? '').trim())
+    .filter((s) => s && s !== '@全体成员')
+    .map((s) => s.replace(/\(QQ:\d+\)\s*$/, '').replace(/^@/, '').trim())
+    .filter(Boolean);
+  const atOthers = ats.length > 0 && entry?.atMe !== true;
+  if (atOthers) labels.push(`对${ats.slice(0, 3).join('、')}说`);
+  if (!atOthers && (/[?？]$/.test(text.trim()) || /[吗呢]/.test(text))) labels.push('提问');
   if (text.startsWith('[引用 ')) labels.push('引用');
   // 拍一拍：被拍的是我时标「拍我」（召唤信号），拍别人只标「拍一拍」（背景事件）
   if (text.includes('[拍一拍]')) labels.push(/拍了拍\s*我/.test(text) ? '拍我' : '拍一拍');

@@ -15,7 +15,7 @@ process.env.QQ_AGENT_DATA_DIR = __testDataDir;
 
 const { ChatStore } = await import('../src/store.js');
 const { MemoryStore } = await import('../src/memory.js');
-const { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, stripMentions } = await import('../src/prompt.js');
+const { buildSystemPrompt, buildUserPrompt, buildPastState, resolveContextTier, stripMentions, buildTriggerBlock } = await import('../src/prompt.js');
 const { segmentsToText } = await import('../src/onebot.js');
 const { setRuntimeConfig, DEFAULT_CONFIG } = await import('../src/config.js');
 const { saveMind, clearMind } = await import('../src/mind.js');
@@ -361,6 +361,51 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(!noUnread.includes('【本群新说法'), '没有未读（主动机会）时不注入');
   const priv = buildWith('private:9', ['尊嘟假嘟']);
   assert.ok(!priv.includes('【本群新说法'), '私聊不注入');
+}
+
+// ── 11c. 谁对谁说（2026-11-01 用户反馈：分不清有些话是谁对谁说的）──────
+{
+  const labelCtx = { selfNickname: '测试机', selfId: '888' };
+  const line = (entry) => buildTriggerBlock([entry], labelCtx);
+  // @ 别人的提问：要标「对谁说」，且**不能**标成「提问」（那是问别人的）
+  const toOther = line({
+    mid: 1, ts: Date.now(), senderId: 'u1', senderName: '甲', self: false,
+    text: '@张三(QQ:123) 你吃了吗？', atNames: ['@张三(QQ:123)'], atMe: false
+  });
+  assert.ok(toOther.includes('（对张三说）'), `@别人应标出对谁说，实际：${toOther}`);
+  assert.ok(!toOther.includes('提问'), '问别人的问题不应标「提问」（模型会当成在问自己）');
+  assert.ok(toOther.includes('@张三(QQ:123)'), '正文里的 @ 原文应保留（模型靠 QQ 号区分同名）');
+
+  // 多个 @：最多列 3 个
+  const multi = line({
+    mid: 2, ts: Date.now(), senderId: 'u2', senderName: '乙', self: false,
+    text: '@张三 @李四 @王五 饥荒有没有', atNames: ['@张三(QQ:123)', '@李四(QQ:124)', '@王五(QQ:125)'], atMe: false
+  });
+  assert.ok(multi.includes('（对张三、李四、王五说）'), `多个 @ 应一起标出，实际：${multi}`);
+
+  // 无人 @ 的提问：仍标「提问」（这个标签本身有用，别误删）
+  const plainQ = line({
+    mid: 3, ts: Date.now(), senderId: 'u3', senderName: '丙', self: false,
+    text: '这游戏好玩吗', atNames: [], atMe: false
+  });
+  assert.ok(plainQ.includes('（提问）'), '没有 @ 别人的提问仍应标「提问」');
+
+  // @ 机器人自己：应标「@我」，不能标「对机器人说」
+  const toMe = line({
+    mid: 4, ts: Date.now(), senderId: 'u4', senderName: '丁', self: false,
+    text: '@测试机 在吗？', atNames: ['@测试机(QQ:888)'], atMe: true
+  });
+  assert.ok(toMe.includes('@我'), '@机器人应标「@我」');
+  assert.ok(!toMe.includes('（对测试机说）'), '不能把 @我也标成「对…说」');
+
+  // 引用解析失败：也要保留「这是回复」的语义，不能静默丢掉
+  const replyPrompt = buildUserPrompt({
+    chatKey: 'group:123', kind: 'group', chatId: '123', chatName: '测试群',
+    triggerEntries: [{ id: 'r1', mid: 5, ts: Date.now(), senderId: 'u5', senderName: '戊', text: '那你呢', reply: { id: 999 }, atNames: [], atMe: false }],
+    store, memory, stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],
+    selfNickname: '测试机', runSeq: 42, moreUnreadDuringRun: false, proactive: false
+  });
+  assert.ok(replyPrompt.includes('[引用 某条消息（原文已不可用）]'), '引用原文解析不到时应保留引用标记');
 }
 
 // ── 12. 接话要有内容（核心规则：空转短句禁令，配合话题热身卡）────────────

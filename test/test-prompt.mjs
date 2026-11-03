@@ -464,6 +464,19 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(!sys13.includes('能接的话题就接'), 'medium 不应再写"能接的话题就接"');
 }
 
+// ── 14. B 站内容取用（2026-11-03：让它别拿通用搜索给 B 站视频下结论）──────
+// 背景：问"原神米提亚角色预告"，它连搜三次 web_search 没结果，回"刚去官网翻了还没挂"——
+// 实际上 B 站站内搜索一搜就有，而且它根本没调抓取工具。这里锁住三条：
+// ① 指明用 B 站搜索工具；② 给出取视频信息的接口；③ 禁止假称"我查过/我去官网翻了"。
+{
+  const sys14 = buildSystemPrompt();
+  assert.ok(sys14.includes('【B 站内容怎么查（别拿通用网页搜索下结论）】'), '系统提示应包含 B 站取用段');
+  assert.ok(sys14.includes('agent-reach__bili_search'), '应点名 B 站搜索工具，而不是让模型自己猜');
+  assert.ok(sys14.includes('api.bilibili.com/x/web-interface/view'), '应给出按 BV 号取标题/简介/发布时间的接口');
+  assert.ok(sys14.includes('通用搜索没收录不代表没发布'), '应提醒通用搜索的新鲜度问题');
+  assert.ok(sys14.includes('没真的调用工具，就不要说'), '应禁止编造"我去官网翻了"这类动作');
+}
+
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('✓ 提示词自测全部通过');

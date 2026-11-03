@@ -104,6 +104,25 @@ function speakOrNot(participation) {
   ].join('\n');
 }
 
+/**
+ * 【B 站内容怎么查】（2026-11-03）
+ *
+ * 用户反馈：让机器人"看一下原神新发的米提亚角色预告"，它连搜三次通用网页搜索
+ * （"原神 米提亚 角色预告"）都没结果，然后回了"刚去官网翻了，米提亚的预告还没挂出来"
+ * —— 两处都错：① 视频当天 12:00 才发，通用搜索还没收录，但 B 站站内搜索一搜就有
+ * （实测 code=0、20 条结果，官方 PV 也在）；② 它**没调任何抓取工具却说"去官网翻了"**，
+ * 属于编造动作。这里把"该用哪个工具"写死，并明令禁止假称查过。
+ */
+function bilibiliPlaybook() {
+  return [
+    '【B 站内容怎么查（别拿通用网页搜索下结论）】',
+    '- 问某个 B 站视频 / 角色 PV / 预告 / UP 主发了什么：先用「搜B站视频」工具（agent-reach__bili_search）搜角色名、作品名；两个词分开各搜一次也行。B 站站内搜索比通用网页搜索新得多，**通用搜索没收录不代表没发布**。',
+    '- 已知 BV 号、只要标题/UP主/发布时间/简介：直接抓 https://api.bilibili.com/x/web-interface/view?bvid=BV号 （web_fetch 可用，返回 data.title / owner.name / pubdate / desc）。',
+    '- 要把视频本体发到群里：bili-share__bili_video；只想告诉大家有这视频：发标题 + 链接就够。',
+    '- 换过工具、换过关键词都查不到，才可以说"没找到"。**没真的调用工具，就不要说"我去官网翻了/我查过了"——那是编造动作，比查不到更糟。**'
+  ].join('\n');
+}
+
 function notAQueue() {
   return [
     '【群聊不是客服队列】',
@@ -478,6 +497,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     ['记忆规则', memoryRules()],
     ['表情规则', stickerRules()],
     ['QQ场景规则', qqSceneRules()],
+    ['B站内容取用', bilibiliPlaybook()],
     ['发送禁令', reportBan()]
   ];
   const parts = [];
@@ -485,7 +505,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
   // 也没有引用/@ 工具（语音里也没法引用），这两段纯吃 prefill。
   // 实测（2026-10-12 分节埋点）：表情规则 483 + 引用与点名 272 ≈ 755 字符，
   // 占通话提示词的 10%。非通话会话 slimOn=false，逐字节不变。
-  const CORE_SKIP_FOR_CALL = new Set(['表情规则', '引用与点名']);
+  const CORE_SKIP_FOR_CALL = new Set(['表情规则', '引用与点名', 'B站内容取用']);
   coreBlocks.forEach(([name, text]) => {
     if (slimOn && CORE_SKIP_FOR_CALL.has(name)) return;   // 连分隔空行一起省
     if (parts.length) parts.push('');

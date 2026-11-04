@@ -189,4 +189,19 @@ ok(syncedEntry, '自学习库里的标题应跟着改');
 eq(syncedEntry.meaning, '晋升后修正的解释', '自学习库里的含义应同步');
 ok(!userSaved.entries.some((e) => e.title === '编辑测试梗'), '旧标题不应残留（否则查重会漏）');
 
+// ── 10. 谐音标签闭环（A 方案）：晋升带「谐音」标签的候选 → 谐音提示表 ──
+const { listHomophones } = await import('../src/homophones.js');
+const homTags = core.candidateToEntry({ title: '测试谐音梗', meaning: '「测试本字」的谐音，随口调侃用', tags: ['谐音', '测试'] });
+eq(homTags.tags.includes('谐音'), true, '谐音标签应保留在 entry 里（不丢标签）');
+core.saveCandidates({
+  ...core.loadCandidates(),
+  candidates: [
+    ...core.loadCandidates().candidates,
+    { id: 'md-hom', title: '测试谐音梗', aliases: [], meaning: '「测试本字」的谐音，随口调侃用', evidence: '测试', confidence: 0.9, tags: ['谐音'], status: 'pending', source: 'distill', createdAt: now }
+  ]
+});
+eq(core.promoteCandidate('md-hom').ok, true, '带谐音标签的候选应能晋升');
+const lex = listHomophones();
+ok(lex.some((h) => h.term === '测试谐音梗'), '晋升后带「谐音」标签的条目应自动进入谐音提示表');
+
 console.log(`梗候选库测试全部通过 ✅（${passed} 项）`);

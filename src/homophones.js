@@ -10,6 +10,19 @@
 // 提示只负责把"这是谐音"这条信息摆到模型眼前，接不接、怎么接仍由它判断；
 // 表里没有的谐音，靠系统提示里的通用规则 + 「查网络梗」工具。
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DATA_DIR } from './config.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const APP_ROOT = path.resolve(HERE, '..');
+// 梗库（skills/trendy-memes/kb/*.json）与自学习库：标签里带「谐音」的条目自动并进来。
+// 这样"谐音梗大全"不用手抄死在代码里 —— 梗库/蒸馏管线/「收录网络梗」新增一条带谐音
+// 标签的条目，下一次构建提示词就生效（文件变更按 mtime 失效缓存）。
+const KB_DIR = path.join(APP_ROOT, 'skills', 'trendy-memes', 'kb');
+const USER_FILE = path.join(DATA_DIR, 'trendy-memes', 'user-added.json');
+
 export const HOMOPHONES = [
   { term: '玉玉', meaning: '抑郁', note: '「抑郁了」的谐音，调侃情绪低落' },
   { term: '蚌埠住了', meaning: '绷不住了', note: '忍不住笑 / 情绪绷不住' },
@@ -28,6 +41,58 @@ export const HOMOPHONES = [
   { term: '耗子尾汁', meaning: '好自为之', note: '出自马保国' }
 ];
 
+let cache = { key: '', list: null };
+
+function mtimeOf(file) {
+  try { return fs.statSync(file).mtimeMs; } catch { return 0; }
+}
+
+/** 从梗库/自学习库收集带「谐音」标签（或解释里写了谐音）的条目。 */
+function collectedEntries() {
+  const out = [];
+  const push = (title, meaning, tags) => {
+    const term = String(title ?? '').trim();
+    const m = String(meaning ?? '').replace(/\s+/g, ' ').trim();
+    if (!term || term.length < 2 || term.length > 20 || !m) return;
+    const tagged = Array.isArray(tags) && tags.some((t) => /谐音/.test(String(t)));
+    if (!tagged && !/谐音/.test(m)) return;
+    out.push({ term, meaning: m.slice(0, 60), note: '来自梗库' });
+  };
+  try {
+    for (const name of fs.readdirSync(KB_DIR).filter((n) => n.endsWith('.json'))) {
+      const raw = JSON.parse(fs.readFileSync(path.join(KB_DIR, name), 'utf8'));
+      for (const e of (Array.isArray(raw) ? raw : (raw?.entries || []))) push(e?.title, e?.meaning, e?.tags);
+    }
+  } catch { /* 没有梗库就只用内置表 */ }
+  try {
+    const raw = JSON.parse(fs.readFileSync(USER_FILE, 'utf8'));
+    for (const e of (Array.isArray(raw) ? raw : (raw?.entries || []))) push(e?.title, e?.meaning, e?.tags);
+  } catch { /* 自学习库还不存在 */ }
+  return out;
+}
+
+/**
+ * 生效的谐音表 = 内置高置信表 + 梗库/自学习库里的谐音条目（按 mtime 缓存）。
+ * 内置项优先（同名词条不重复报）。
+ */
+export function listHomophones() {
+  const key = [
+    mtimeOf(USER_FILE),
+    ...(function () { try { return fs.readdirSync(KB_DIR).filter((n) => n.endsWith('.json')).map((n) => mtimeOf(path.join(KB_DIR, n))); } catch { return []; } })()
+  ].join(',');
+  if (cache.list && cache.key === key) return cache.list;
+  const seen = new Set();
+  const list = [];
+  for (const h of [...HOMOPHONES, ...collectedEntries()]) {
+    const norm = String(h.term).toLowerCase().replace(/\s+/g, '');
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    list.push(h);
+  }
+  cache = { key, list };
+  return list;
+}
+
 /**
  * 命中哪些谐音梗。
  * 长词优先：出现「蚌埠住了」时不再重复报「蚌埠」；同一句最多 max 条。
@@ -38,8 +103,8 @@ export const HOMOPHONES = [
 export function matchHomophones(text, max = 3) {
   const hay = String(text ?? '').toLowerCase().replace(/[\s\u3000]+/g, '');
   if (!hay) return [];
-  const hits = HOMOPHONES
-    .filter((h) => hay.includes(h.term.toLowerCase()))
+  const hits = listHomophones()
+    .filter((h) => hay.includes(String(h.term).toLowerCase().replace(/\s+/g, '')))
     .sort((a, b) => b.term.length - a.term.length);
   const kept = [];
   for (const h of hits) {

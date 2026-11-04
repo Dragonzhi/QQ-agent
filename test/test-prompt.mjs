@@ -477,6 +477,32 @@ for (const banned of ['[SILENT]', 'mcp__snowluma', 'qq_set_wake_config', 'qq_mar
   assert.ok(sys14.includes('没真的调用工具，就不要说'), '应禁止编造"我去官网翻了"这类动作');
 }
 
+// ── 15. 谐音梗（2026-11-04：别再按字面理解"玉玉""蚌埠住了"）──────────────
+{
+  const sys15 = buildSystemPrompt();
+  assert.ok(sys15.includes('【谐音梗】'), '系统提示应包含谐音梗段');
+  assert.ok(sys15.includes('玉玉＝抑郁'), '应给出最常见的谐音对照');
+  assert.ok(sys15.includes('听懂了也别顺口把谐音解释'), '应避免把谐音解释给群友听（扫兴）');
+
+  const buildUnread = (texts) => buildUserPrompt({
+    chatKey: 'group:123', kind: 'group', chatId: '123', chatName: '测试群',
+    triggerEntries: texts.map((t, i) => ({ id: `h${i}`, mid: 800 + i, ts: Date.now(), senderId: 'u9', senderName: '群友9', text: t, atNames: [], atMe: false })),
+    store, memory, stickerEntries: [{ id: 's1', desc: '滑稽', useCount: 3 }],
+    selfNickname: '测试机', runSeq: 51, moreUnreadDuringRun: false, proactive: false
+  });
+  const hit = buildUnread(['你🐋玉玉了同学']);
+  assert.ok(hit.includes('【这句里有谐音，别按字面接】'), '命中谐音词时应注入提示');
+  assert.ok(hit.includes('玉玉 = 抑郁'), '提示应给出本字与含义');
+  assert.ok(hit.indexOf('【未读信息】') < hit.indexOf('【这句里有谐音'), '谐音提示应在未读之后（动态区）');
+
+  const longest = buildUnread(['我蚌埠住了']);
+  assert.ok(longest.includes('蚌埠住了 = 绷不住了'), '长词应命中完整写法');
+  assert.ok(!longest.includes('蚌埠 = 绷不住（'), '长词命中后不再重复报短词');
+
+  const plain = buildUnread(['今天吃什么']);
+  assert.ok(!plain.includes('【这句里有谐音'), '没有谐音词时不注入（不唠叨）');
+}
+
 try { fs.rmSync(__testDataDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
 console.log('✓ 提示词自测全部通过');

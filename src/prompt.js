@@ -19,6 +19,7 @@ import { formatFullTime, formatShortTime, looksLikeToolCallText } from './util.j
 import { buildStickerContext, buildStickerStrategyHint } from './stickers.js';
 import { loadActiveMemes } from './group-memes.js';
 import { matchWatched, formatWatchHint } from './meme-learning.js';
+import { matchHomophones, formatHomophoneHint } from './homophones.js';
 import { loadMind, formatMind } from './mind.js';
 import { skillManager } from './skills/manager.js';
 
@@ -120,6 +121,24 @@ function bilibiliPlaybook() {
     '- 已知 BV 号、只要标题/UP主/发布时间/简介：直接抓 https://api.bilibili.com/x/web-interface/view?bvid=BV号 （web_fetch 可用，返回 data.title / owner.name / pubdate / desc）。',
     '- 要把视频本体发到群里：bili-share__bili_video；只想告诉大家有这视频：发标题 + 链接就够。',
     '- 换过工具、换过关键词都查不到，才可以说"没找到"。**没真的调用工具，就不要说"我去官网翻了/我查过了"——那是编造动作，比查不到更糟。**'
+  ].join('\n');
+}
+
+/**
+ * 【谐音梗】（2026-11-04）
+ *
+ * 用户反馈 bot 常按字面理解谐音。取证（van♂游群 11-03）：群友说「你🐋玉玉了同学」，
+ * 它只接了"心疼钱包"，没读出玉玉＝抑郁；群友说「肥鱼真是区啊」（区＝蛆的谐音），
+ * 它自己推理成"'区'可能是'菜'的意思"，回了句"区也是勤勤恳恳的区"。
+ * 核心小表只覆盖最常见的几个，其余靠这条通用规则 + 「查网络梗」工具。
+ */
+function homophoneRule() {
+  return [
+    '【谐音梗】',
+    '- 群里不少话是按音说的：玉玉＝抑郁、蚌埠住了＝绷不住了、尊嘟＝真的、栓Q＝thank you、夺笋＝多损；骂人语境里的「区」多半是「蛆」。',
+    '- 一句话读起来不通、但某个词音近另一个词时，先按谐音理解，再决定接不接；不确定就查梗或反问一句，不要按字面硬接。',
+    '- 听懂了也别顺口把谐音解释给群友听（"你是想说抑郁吧"很扫兴）；直接按那个意思接话就行。',
+    '- 反过来也别把每个音近词都当梗：人名、地名、正常词（"压力""姐妹""芜湖"）照常理解。'
   ].join('\n');
 }
 
@@ -497,6 +516,7 @@ export function buildSystemPrompt({ persona, skillContext, extraSections = [], c
     ['记忆规则', memoryRules()],
     ['表情规则', stickerRules()],
     ['QQ场景规则', qqSceneRules()],
+    ['谐音梗', homophoneRule()],
     ['B站内容取用', bilibiliPlaybook()],
     ['发送禁令', reportBan()]
   ];
@@ -1378,6 +1398,14 @@ export function buildUserPrompt(ctx) {
   // 未读信息
   const triggerBlock = buildTriggerBlock(ctx.triggerEntries, ctx);
   parts.push(`【未读信息】以下是你还没看过的最新消息（每条前的 #数字 是消息 id，引用回复/看图时用它）：\n${triggerBlock}`);
+
+  // ── 谐音梗提示（2026-11-04）──────────────────────────────────────────
+  // 命中内置小表（玉玉＝抑郁 等）才注入，避免每轮唠叨。放在未读之后的动态区。
+  {
+    const unreadText = (ctx.triggerEntries || []).map((m) => String(m?.text ?? '')).join('\n');
+    const hint = formatHomophoneHint(matchHomophones(unreadText));
+    if (hint) parts.push(hint);
+  }
 
   // ── 本次是怎么醒的（2026-11-01）──────────────────────────────────────
   // 用户反馈"群里说的事情都没搞明白"。取证（van♂游群 22:55–23:01）：6 分钟里
